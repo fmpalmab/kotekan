@@ -31,6 +31,7 @@ class KotekanPowerStream():
       TCP_IP = self.host
       TCP_PORT = self.port
       self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+      self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
       self.sock.bind((TCP_IP, TCP_PORT))
       self.sock.listen(1)
       self.connect_tcp()
@@ -95,8 +96,8 @@ class KotekanPowerStream():
 
 
 class MyWSServerFactory(WebSocketServerFactory):
-   def __init__(self, url):
-      WebSocketServerFactory.__init__(self, url)
+   def __init__(self):
+      WebSocketServerFactory.__init__(self)
       self.clients = []
 
    def register(self, client):
@@ -129,7 +130,7 @@ class MyServerProtocol(WebSocketServerProtocol):
       self.factory.register(self)
       self.nfreq=KotekanConn.frame_nfreq
       self.nvis =KotekanConn.frame_nvis
-      self.sendfreq=128 #number of freqs to transmit
+      self.sendfreq=1024 #number of freqs to transmit
       self.ntime=1      #number of timesteps to transmit
       self.target_name='Undefined'
       self.databuf = np.zeros((self.ntime, self.nvis, self.nfreq), dtype=np.float32)
@@ -199,8 +200,8 @@ def shutdown(sig, frame):
    KotekanConn.close_tcp()
    reactor.stop()
 
-KotekanConn = KotekanPowerStream()
-WebSockConn = MyWSServerFactory("ws://localhost:8539")
+global KotekanConn, WebSockConn
+
 signal.signal(signal.SIGINT, shutdown)
 
 from twisted.web import static, server
@@ -215,10 +216,20 @@ class Site(server.Site):
 if __name__ == '__main__':
    import os
    import sys
+   import argparse
+
+   parser = argparse.ArgumentParser(description="Load a live viewer for kotekan clients.")
+   parser.add_argument("-H", "--hostname", help = "IP / host name that is serving", default="localhost")
+   parser.add_argument("-w", action='store_true', help="Launch browser locally")
+   args = parser.parse_args()
+
    dir = os.path.dirname(os.path.abspath(sys.argv[0]))
    os.chdir(dir)
 
    log.startLogging(sys.stdout)
+
+   KotekanConn = KotekanPowerStream()
+   WebSockConn = MyWSServerFactory() #"ws://"+args.hostname+":8539")
 
    factory = WebSockConn
    factory.protocol = MyServerProtocol
@@ -230,8 +241,9 @@ if __name__ == '__main__':
 
    reactor.listenTCP(8080, site)
 
-   import webbrowser
-   webbrowser.open('http://localhost:8080')
+   if (args.w):
+      import webbrowser
+      webbrowser.open("http://"+args.hostname+":8080")
 
    reactor.run()
 

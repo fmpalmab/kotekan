@@ -5,11 +5,12 @@ function waterfall(container){
     var self=this;
     this.container=container
 
-	this.kotekan_url = "localhost"
+	this.kotekan_url = location.hostname;
 	this.kotekan_port= 12048
 
 	this.num_freqs=1024;
 	this.waterfall_buffer_length=1000;
+	this.waterfall_buffer_max_length=2500;
 	this.waterfall_buffer_display_length=300;
 	this.plot_width=512;
 	this.margin=[100,100];
@@ -26,6 +27,8 @@ function waterfall(container){
 
 	this.cb.min=0;
 	this.cb.max=20;
+
+	this.disp_freq=[1417.,1425.]
 
 	this.time=new Date().getTime();
 
@@ -136,31 +139,41 @@ waterfall.prototype.dodraw =
 			}
 			img_mean[i]/=scd.length;
 		}
-	 	var c = this.scroll_canvas[0].getContext("2d");
+	 	var c = this.scroll_canvas[0].getContext("2d")
 		c.imageSmoothingEnabled = false;
-		imageData = c.createImageData(this.num_freqs,this.waterfall_buffer_display_length)
+		var freq_sc = this.freq_list[this.freq_list.length-1]-this.freq_list[0]
+		var freq_lo = Math.round(this.num_freqs * (this.disp_freq[0]-this.freq_list[0])/freq_sc)
+		var freq_hi = Math.round(this.num_freqs * (this.disp_freq[1]-this.freq_list[0])/freq_sc)
+		var nf = freq_hi-freq_lo
+		this.scroll_canvas.attr('width',nf).css({'image-rendering': 'pixelated'})
+		imageData = c.createImageData(nf,this.waterfall_buffer_display_length)
 		for (j=disp_start; j<scd.length; j++){
 			scroll_img[j]=[]
-			for (i=0; i<this.num_freqs; i++){
-					scroll_img[j][i]=10*Math.log10(scd[j][i]);
+			for (i=0; i<nf; i++){
+					ii = i+freq_lo
+					scroll_img[j][i]=10*Math.log10(scd[j][ii]);
 					this.cb.setPixel(imageData,i,j-disp_start,scroll_img[j][i])
 			}
 		}
-		c.putImageData(imageData, 0, 0);
-
+		self.freq_scale.domain([self.freq_list[freq_lo],self.freq_list[freq_hi]])
+		self.freq_axisplot.call(self.freq_axis)
 		c.putImageData(imageData, 0, 0);
 		this.yaxis_scale.domain([ new Date(this.timearr[this.timearr.length-ntimes_displayed]*1e3),
 								  new Date(this.timearr[this.timearr.length-1]*1e3) ])
 		this.yaxisplot.call(this.yaxis)
 
-
 		this.spectrum = _.map(_.transpose(this.scroll_data),_mean)
+		var plot_spectrum = this.spectrum.slice(freq_lo,freq_hi)
 		this.spectrum_latest = _.map(_.transpose(this.scroll_data),_.last)
-		
-		var f = Array.from(this.freq_list)
+		var plot_spectrum_latest = this.spectrum_latest.slice(freq_lo,freq_hi)
+		var plot_spectrum_baseline =  this.spectrum_baseline.slice(freq_lo,freq_hi)
+
+		var f = Array.from(this.freq_list.slice(freq_lo,freq_hi))
 		var spectrum_plot_data_update = {
 			x: [f,f,f],
-			y: [_.map(this.spectrum,_dB),_.map(this.spectrum_latest,_dB),_.map(this.spectrum_baseline,_dB)],
+			y: [_.map(plot_spectrum_latest,_dB),
+				_.map(plot_spectrum_baseline,_dB),
+				_.map(plot_spectrum,_dB)],
 		}
 		var spectrum_plot_layout_update = {
 			'yaxis.range':[this.cb.min,this.cb.max],
@@ -168,12 +181,11 @@ waterfall.prototype.dodraw =
 		}
 		Plotly.update(this.spectrum_plot, spectrum_plot_data_update,spectrum_plot_layout_update);
 
-
 		var spectrum_excess_plot_data_update = {
 			x: [f,f],
-			y: [_.map(_.map(this.spectrum,(v, i) => v / this.spectrum_baseline[i]),_dB),
-				_.map(_.map(this.spectrum_latest,(v, i) => v / this.spectrum_baseline[i]),_dB),
-				],
+			y: [_.map(_.map(plot_spectrum_latest,(v, i) => v / plot_spectrum_baseline[i]),_dB),
+				_.map(_.map(plot_spectrum,(v, i) => v / plot_spectrum_baseline[i]),_dB),
+			],
 		}
 		Plotly.restyle(this.spectrum_excess_plot, spectrum_excess_plot_data_update);
 
@@ -183,7 +195,7 @@ waterfall.prototype.openSocket =
 	function()
 	{
 		this.isopen=false;
-	    this.socket = new WebSocket("ws://localhost:8539");
+	    this.socket = new WebSocket("ws://"+location.hostname+":8539");
 	    this.socket.binaryType = "arraybuffer";
 	    self=this
 	    this.socket.onopen = function() {
@@ -238,6 +250,51 @@ waterfall.prototype.closeSocket =
 		this.socket.close()
 	}
 
+waterfall.prototype.addFreqSlider =
+	function(target, range)
+	{
+		var width=$("#"+target).width()
+	    var self=this
+	    var inrange=[-100,100]
+	    var scale=(inrange[1]-inrange[0])/(range[1]-range[0])
+	    var slider_height=50
+		var slider_text=[]
+		var marg=15
+		var width=$("#"+target).width()
+
+
+	    wrapper=$("<div/>").uniqueId().height(slider_height).appendTo($("#"+target))
+	    freqslider=$("<div/>").uniqueId().appendTo(wrapper)
+	    	.css({left:marg, 'margin-top':2*marg, width:width-2*marg})
+
+		freqslider.slider({min:inrange[0],max:inrange[1],range:true,
+						values:[(self.disp_freq[0]-range[0])*scale+inrange[0],
+								(self.disp_freq[1]-range[0])*scale+inrange[0]],
+						slide:function(event, ui){
+							self.disp_freq[0]=(ui.values[0]-inrange[0])/scale+range[0];
+							self.disp_freq[1]=(ui.values[1]-inrange[0])/scale+range[0];
+							slider_text[0].attr({"text":self.disp_freq[0].toFixed(2)});
+							slider_text[0].attr({"x":(ui.values[0]-inrange[0])/(inrange[1]-inrange[0])*(width-2*marg)+marg});
+							slider_text[1].attr({"text":self.disp_freq[1].toFixed(2)});
+							slider_text[1].attr({"x":(ui.values[1]-inrange[0])/(inrange[1]-inrange[0])*(width-2*marg)+marg});	
+							self.draw();
+						}})
+
+		var rr=Raphael($("<div style='position:relative'/>").uniqueId().appendTo(wrapper)[0].id,width, 50);
+		rr.canvas.style.position="absolute";
+		rr.canvas.style.zIndex="100";
+		rr.setStart();
+		slider_text[0]=rr.text((self.disp_freq[0]-range[0])/(range[1]-range[0])*(width-2*marg)+marg,13,
+			self.disp_freq[0].toFixed(2));
+		slider_text[0].attr({'font-size': 12});
+		slider_text[1]=rr.text((self.disp_freq[1]-range[0])/(range[1]-range[0])*(width-2*marg)+marg,13,
+			self.disp_freq[1].toFixed(2));
+		slider_text[1].attr({'font-size': 12});
+		rr.text(width/2,30,"Freq Range [MHz]").attr({'font-size':14});
+		rr.setFinish()
+	}
+
+
 waterfall.prototype.addColorSlider = 
 	function(target,range)
 	{
@@ -250,13 +307,13 @@ waterfall.prototype.addColorSlider =
 		var marg=15
 		var width=$("#"+target).width()
 
-	    wrapper=$("<div style='margin:0px'/>").uniqueId().height(slider_height).appendTo($("#"+target))
+	    wrapper=$("<div/>").uniqueId().height(slider_height).appendTo($("#"+target))
 	    cbslider=$("<div/>").uniqueId().appendTo(wrapper)
-	    	.css({left:marg, width:width-2*marg})
+	    	.css({left:marg, 'margin-top':2*marg, width:width-2*marg})
 
 		cbslider.slider({min:inrange[0],max:inrange[1],range:true,
-						values:[(this.cb.min-range[0])*scale+inrange[0],
-								(this.cb.max-range[0])*scale+inrange[0]],
+						values:[(self.cb.min-range[0])*scale+inrange[0],
+								(self.cb.max-range[0])*scale+inrange[0]],
 						slide:function(event, ui){
 							self.cb.min=(ui.values[0]-inrange[0])/scale+range[0];
 							self.cb.max=(ui.values[1]-inrange[0])/scale+range[0];
@@ -277,9 +334,9 @@ waterfall.prototype.addColorSlider =
 		rr.canvas.style.position="absolute";
 		rr.canvas.style.zIndex="100";
 		rr.setStart();
-		slider_text[0]=rr.text((this.cb.min-range[0])/(range[1]-range[0])*(width-2*marg)+marg,13,self.cb.min.toFixed(2));
+		slider_text[0]=rr.text((self.cb.min-range[0])/(range[1]-range[0])*(width-2*marg)+marg,13,self.cb.min.toFixed(2));
 		slider_text[0].attr({'font-size': 12});
-		slider_text[1]=rr.text((this.cb.max-range[0])/(range[1]-range[0])*(width-2*marg)+marg,13,self.cb.max.toFixed(2));
+		slider_text[1]=rr.text((self.cb.max-range[0])/(range[1]-range[0])*(width-2*marg)+marg,13,self.cb.max.toFixed(2));
 		slider_text[1].attr({'font-size': 12});
 		rr.text(width/2,30,"Color Bar Range [dB]").attr({'font-size':14});
 		rr.setFinish()
@@ -408,6 +465,50 @@ waterfall.prototype.addRecordButton =
 				});
 	}
 
+function download(bytes, fname)  {
+		let blob = new Blob(bytes, {type:"application/octet-stream"});
+		let link = document.createElement('a');
+		link.href = window.URL.createObjectURL(blob);
+		link.download = fname;
+		debugger;
+		link.click();
+		window.URL.revokeObjectURL(link.href);
+	}
+	
+
+waterfall.prototype.addLocalRecordButton = 
+	function(target)
+	{
+		self = this
+		this.recording = false
+		this.fn_idx = 0
+		var marg=15
+		var width=$("#"+target).width()
+	    wrapper=$("<div/>").uniqueId().css({'margin':marg,'width':'100%'})
+	    			.height(45).width(width-2*marg).appendTo($("#"+target))
+
+		this.record_fn=$("<input type='text'/>")
+				.css({'width':'50%','float':'left', 'font-size':'16pt', 'margin-top':5})
+				.val("output"+("000" + this.fn_idx).slice(-4)+".dat")
+				.appendTo(wrapper)
+
+		this.record_btn = $("<button/>").appendTo($( "<div style='margin:10px'/>").appendTo(wrapper))
+				.css({'float':'right'})
+				.button({label:'Save Data', icons: {primary: "ui-icon-disk"}})
+				.click(function() {
+					let file_data = []
+					file_data = file_data.concat(new Int32Array([self.num_freqs,self.scroll_data.length]))
+					file_data = file_data.concat(new Float32Array(self.freq_list))
+					file_data = file_data.concat(new Float32Array(self.spectrum))
+					file_data = file_data.concat(new Float32Array(self.spectrum_baseline))			
+					file_data = file_data.concat(wf.scroll_data)
+					download(file_data, self.record_fn.val());
+					self.fn_idx = self.fn_idx+1;
+					self.record_fn.val("output"+("000" + self.fn_idx).slice(-4)+".dat")
+			});
+	}
+
+
 waterfall.prototype.addAirspyGainControl =
 	function(target,stage_url)
 	{
@@ -522,6 +623,59 @@ waterfall.prototype.addAirspyGainControl =
 	}
 
 
+	waterfall.prototype.addBufferControl =
+	function(target)
+	{
+		self=this
+
+		var width=$("#"+target).width()
+		var marg=15
+	    var self=this
+	    var slider_height=50
+	    var wfslider
+
+	    wrapper=$("<div style='margin:10px'/>").uniqueId().height(slider_height).width(width-2*marg).appendTo($("#"+target))
+
+	    var bintext=$("<p/>").css({'font-family':'sans-serif', 'margin':2})
+	    		.text("Time Samples in full Buffer:").appendTo(wrapper)
+				.css({'float':'left'})
+
+	    wfslider=$("<div style='width:50%'/>").uniqueId().appendTo(wrapper)
+					.slider({min:100,max:this.waterfall_buffer_max_length,value:this.waterfall_buffer_length,
+						slide:function(event, ui){
+							self.waterfall_buffer_length=ui.value;
+							while (self.scroll_data.length > self.waterfall_buffer_length)
+								self.scroll_data.shift();
+							self.draw();
+							bins_text.val(ui.value);
+						}})
+						.css({'float':'left'})
+
+		var bins_text=$("<input type='number'/>")
+				.attr({min:100,max:this.waterfall_buffer_max_length})
+				.css({'width':'17%','display':'inline','font-size':'16pt', 'margin-top':5})
+				.val(this.waterfall_buffer_length)
+				.appendTo(wrapper)
+				.change(
+					function(){
+						if (parseInt(this.value) < ($(this).attr("min"))) {this.value=$(this).attr("min")}
+						if (parseInt(this.value) > ($(this).attr("max"))) {this.value=$(this).attr("max")}
+						wfslider.slider('value',this.value)
+						self.waterfall_buffer_display_length=parseInt(this.value);
+						self.draw()
+					}
+				)
+		bins_text.numeric()
+		
+		wfclearbtn = $("<button/>").uniqueId().appendTo(wrapper)
+				.button({label:'Clear',icons:{primary: "ui-icon-close"}})
+				.css({'display':'inline-block','float':'right'})
+				.click(function() {
+					self.scroll_data=[]
+					self.draw()
+				});
+	}
+
 
 waterfall.prototype.addWaterfallControl =
 	function(target)
@@ -535,9 +689,23 @@ waterfall.prototype.addWaterfallControl =
 	    var wfslider
 
 	    wrapper=$("<div style='margin:10px'/>").uniqueId().height(slider_height).width(width-2*marg).appendTo($("#"+target))
+
+	    var bintext=$("<p/>").css({'font-family':'sans-serif', 'margin':2})
+	    		.text("Time Samples in Waterfall:").appendTo(wrapper)
+				.css({'float':'left'})
+
+	    wfslider=$("<div style='width:50%'/>").uniqueId().appendTo(wrapper)
+					.slider({min:100,max:this.waterfall_buffer_length,value:this.waterfall_buffer_display_length,
+						slide:function(event, ui){
+							self.waterfall_buffer_display_length=ui.value;
+							self.draw()
+							bins_text.val(ui.value);
+						}})
+						.css({'float':'left'})
+
 		var bins_text=$("<input type='number'/>")
-				.attr({min:200,max:this.waterfall_buffer_length})
-				.css({'width':'25%','float':'right', 'font-size':'16pt', 'margin-top':5})
+				.attr({min:100,max:this.waterfall_buffer_length})
+				.css({'width':'17%','display':'inline', 'font-size':'16pt', 'margin-top':5})
 				.val(this.waterfall_buffer_display_length)
 				.appendTo(wrapper)
 				.change(
@@ -550,18 +718,6 @@ waterfall.prototype.addWaterfallControl =
 					}
 				)
 		bins_text.numeric()
-
-	    var bintext=$("<p/>").css({'font-family':'sans-serif', 'margin':2})
-	    		.text("Time Samples in Waterfall:").appendTo(wrapper)
-
-	    wfslider=$("<div style='width:70%'/>").uniqueId().appendTo(wrapper)
-					.slider({min:200,max:this.waterfall_buffer_length,value:this.waterfall_buffer_display_length,
-						slide:function(event, ui){
-							self.waterfall_buffer_display_length=ui.value;
-							self.draw()
-							bins_text.val(ui.value);
-						}})
-
 	}
 
 waterfall.prototype.change_palette=
@@ -579,9 +735,10 @@ waterfall.prototype.add_spectrum=
 				.height(300).width(this.plot_width+this.margin[0]/2-1)
 				.css({'margin-left':this.margin[0]/2})
 		spectrum_plot_data_mean     = {x: [],y: [],type: 'scatter',name:'Mean'}			
-		spectrum_plot_data_latest   = {x: [],y: [],type: 'scatter',name:'Latest'}
+		spectrum_plot_data_latest   = {x: [],y: [],type: 'scatter',name:'Latest',mode:'markers',
+											marker: {size: 3} }
 		spectrum_plot_data_baseline = {x: [],y: [],type: 'scatter',name:'Baseline'}			
-		var data = [spectrum_plot_data_mean, spectrum_plot_data_latest, spectrum_plot_data_baseline];
+		var data = [spectrum_plot_data_latest, spectrum_plot_data_baseline, spectrum_plot_data_mean];
 		this.show_spectrum_mean = true
 		this.show_spectrum_latest = true
 		this.show_spectrum_baseline = true
@@ -618,8 +775,9 @@ waterfall.prototype.add_spectrum_excess=
 				.height(200).width(this.plot_width+this.margin[0]/2)
 				.css({position:'relative',float:'left'})
 		spectrum_plot_excess_mean     = {x: [],y: [],type: 'scatter',name:'Mean'}			
-		spectrum_plot_excess_latest   = {x: [],y: [],type: 'scatter',name:'Latest'}
-		var data = [spectrum_plot_excess_mean, spectrum_plot_excess_latest];
+		spectrum_plot_excess_latest   = {x: [],y: [],type: 'scatter',name:'Latest',mode:'markers',
+											marker: {size: 3} }
+		var data = [spectrum_plot_excess_latest, spectrum_plot_excess_mean];
 		this.show_spectrum_excess_mean = true
 		this.show_spectrum_excess_latest = true
 
@@ -628,7 +786,7 @@ waterfall.prototype.add_spectrum_excess=
 		var layout = {
 			title: {text:'Excess Spectral Power'},
 			xaxis: {title: {text: 'Frequency (MHz)'},linecolor: 'black',zeroline:false},
-			yaxis: {title: {text: 'Excess Power (dB bits^2)'},linecolor: 'black',zeroline:false,range:[-5,5]},
+			yaxis: {title: {text: 'Excess Power (dB bits^2)'},linecolor: 'black',zeroline:false,range:[-1,2]},
 			margin: {t:30, l:50, r:10, b:40},
 			legend: {xanchor:'right',x:1.0,y:0.}
 		}
