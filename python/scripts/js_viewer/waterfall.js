@@ -17,16 +17,20 @@ function waterfall(container){
 	this.waterfall_plot_height=500;
 
 	this.scroll_data=[];
+	this.bandpass_data=[];
+	this.autocal_length=128;
+	this.skip_length=20;
 	this.spectrum_baseline=[];
 	this.timearr=[];
 	this.ms_per_datum=25.;
 	this.freq_list=[];
+	this.mode="normal";
 
 	this.cb = new imgPlotter();
 	this.cb_rect;
 
-	this.cb.min=0;
-	this.cb.max=20;
+	this.cb.min=3;
+	this.cb.max=7;
 
 	this.disp_freq=[1417.,1425.]
 
@@ -115,6 +119,7 @@ function waterfall(container){
 waterfall.prototype.draw =
 	function()  {
 		var self=this
+		if (!(this.mode === "normal")) return
 		var now = new Date().getTime();
 		var dt = now - (this.time || now);
 		if (dt < 50) return;
@@ -144,7 +149,7 @@ waterfall.prototype.dodraw =
 		var freq_sc = this.freq_list[this.freq_list.length-1]-this.freq_list[0]
 		var freq_lo = Math.round(this.num_freqs * (this.disp_freq[0]-this.freq_list[0])/freq_sc)
 		var freq_hi = Math.round(this.num_freqs * (this.disp_freq[1]-this.freq_list[0])/freq_sc)
-		var nf = freq_hi-freq_lo
+		var nf = Math.round(freq_hi-freq_lo)
 		this.scroll_canvas.attr('width',nf).css({'image-rendering': 'pixelated'})
 		imageData = c.createImageData(nf,this.waterfall_buffer_display_length)
 		for (j=disp_start; j<scd.length; j++){
@@ -152,6 +157,7 @@ waterfall.prototype.dodraw =
 			for (i=0; i<nf; i++){
 					ii = i+freq_lo
 					scroll_img[j][i]=10*Math.log10(scd[j][ii]);
+					if (this.baseline_check[0].checked) scroll_img[j][i]-=10*Math.log10(this.spectrum_baseline[ii])
 					this.cb.setPixel(imageData,i,j-disp_start,scroll_img[j][i])
 			}
 		}
@@ -171,10 +177,15 @@ waterfall.prototype.dodraw =
 		var f = Array.from(this.freq_list.slice(freq_lo,freq_hi))
 		var spectrum_plot_data_update = {
 			x: [f,f,f],
-			y: [_.map(plot_spectrum_latest,_dB),
-				_.map(plot_spectrum_baseline,_dB),
-				_.map(plot_spectrum,_dB)],
+			y: this.baseline_check[0].checked ?
+				[plot_spectrum_latest.map((e,i) => _dB(e / plot_spectrum_baseline[i])),
+				 [],
+				 plot_spectrum.map((e,i) => _dB(e / plot_spectrum_baseline[i]))] :
+				[_.map(plot_spectrum_latest,_dB),
+				 _.map(plot_spectrum_baseline,_dB),
+				 _.map(plot_spectrum,_dB)],
 		}
+
 		var spectrum_plot_layout_update = {
 			'yaxis.range':[this.cb.min,this.cb.max],
 			'yaxis.visible':[this.show_spectrum_mean,this.show_spectrum_latest,this.show_spectrum_baseline]
@@ -227,8 +238,28 @@ waterfall.prototype.openSocket =
 		       	  while (self.timearr.length>self.waterfall_buffer_length) {self.timearr.shift();}
 		       	  self.timearr.push(timestamp);
 		          var arr = new Float32Array(e.data.slice(9));
-				  while (self.scroll_data.length>self.waterfall_buffer_length) {self.scroll_data.shift();}
-				  self.scroll_data.push(arr);
+				  if (self.mode === "normal") {
+					while (self.scroll_data.length>self.waterfall_buffer_length) {self.scroll_data.shift();}
+					  self.scroll_data.push(arr);
+				  }
+				  else if (self.mode === "bandpass") {
+					self.bandpass_data.push(arr);
+					var percent = self.bandpass_data.length / (self.autocal_length+self.skip_length) * 100
+					self.bandpass_button.button({label:'Taking calibration: '+percent.toFixed(2)+'%'})
+					if (self.bandpass_data.length >= self.autocal_length+self.skip_length) {
+						self.mode = "idle"
+						for (i =0; i<self.skip_length; i++) self.bandpass_data.shift()
+						self.process_if_bandpass()
+					}
+				  }
+				  else if (self.mode === "skip") {
+					var arr = new Float32Array(e.data.slice(9));
+					self.scroll_data.push(arr);
+					if (self.scroll_data.length >= self.skip_length) {
+						for (i =0; i<self.skip_length; i++) self.scroll_data.shift()
+						self.mode = "normal"
+					}
+				  }
 				  break;
 			  }
 	       }
@@ -403,29 +434,35 @@ waterfall.prototype.addColorSelect =
 
 waterfall.prototype.start = function() {
 	this.openSocket();
+	this.mode = "normal";
+	this.scroll_data = [];
 }
 waterfall.prototype.stop = function() {
 	this.closeSocket();
+	this.mode = "stopped";
 }
 
 waterfall.prototype.addStartStop =
 	function(target)
 	{
 		self=this
-	    wrapper=$("<div/>").uniqueId().appendTo($("#"+target)).css({margin:45})
+		let label= (self.mode === "stopped")? "Start" : "Stop"
+		let icon = (self.mode === "stopped")? "ui-icon-play" : "ui-icon-stop"
+		wrapper=$("<div/>").uniqueId().appendTo($("#"+target)).css({margin:45})
 		self.startstop_btn = $("<button/>").appendTo($("<div/>").appendTo(wrapper))
-				.button({label:'Start',icons:{primary: "ui-icon-play"}})
+				.button({label:label,icons:{primary: icon}})
 				.css({margin:"0 auto",display:"block"})
 				.css({'border':'1px solid'})
 				.click(function() {
-				 	if ( $( this ).text() === "Stop" ) {
-						$( this ).button( "option", {label: "Start", icons: {primary: "ui-icon-play"}})
-							.css({'border':'1px solid'})
-						self.stop();
-				    } else {
+				 //	if ( $( this ).text() === "Stop" ) {
+					if ( self.mode === "stopped" ) {
 						$( this ).button( "option", {label: "Stop", icons: {primary: "ui-icon-stop"}})
 							.css({'border':'3px solid green'})
 						self.start();
+				    } else {
+						$( this ).button( "option", {label: "Start", icons: {primary: "ui-icon-play"}})
+							.css({'border':'1px solid'})
+						self.stop();
 					}
 				});
 	}
@@ -766,14 +803,89 @@ waterfall.prototype.add_baseline_control=
 				.click(function() {
 						self.spectrum_baseline = _.map(_.transpose(self.scroll_data),_mean)
 				});
+
+		self.baseline_check = $("<input type='checkbox'/>").appendTo(wrapper)
+//				.checkboxradio() //{label:'Remove Baseline'})
+//				.on(function(e) {
+//						self.remove_baseline = e.target.is( ":checked" )
+//				});
+
 	}
+
+function sleep(ms) {
+	return new Promise(resolve => setTimeout(resolve, ms))
+}
+	
+waterfall.prototype.add_autocal_if=
+	function(target,stage_url){
+		self=this
+		wrapper=$("<div/>").uniqueId().appendTo($("#"+target))
+						.css({position:'relative',float:'left'})
+		self.bandpass_button = $("<button/>").appendTo(wrapper)
+				.button({label:'Autocalibrate Bandpass',icons:{primary: "ui-icon-play"}})
+				.click(function() {
+					fetch('http://'+self.kotekan_url+':'+self.kotekan_port+'/'+stage_url+'/set_config', {
+						mode: 'no-cors',
+						method: 'POST',
+						headers: {
+							'Accept': 'application/json',
+							'Content-Type': 'application/json'
+						},
+						body: JSON.stringify({"freq": 1416})
+					})
+					.then(gather_if_bandpass())
+				});
+
+		gather_if_bandpass = function(){
+				self.bandpass_data = []
+				self.scroll_data = []
+				self.mode = "bandpass"
+			}
+		self.process_if_bandpass = function(){
+				self.spectrum_baseline = _.map(_.transpose(self.bandpass_data),_mean)
+
+				fetch('http://'+self.kotekan_url+':'+self.kotekan_port+'/'+stage_url+'/set_config', {
+					mode: 'no-cors',
+					method: 'POST',
+					headers: {
+						'Accept': 'application/json',
+						'Content-Type': 'application/json'
+					},
+					body: JSON.stringify({"freq": 1421})
+				})
+				.then(resume_data())
+			};
+		
+		resume_data = function(){
+			self.bandpass_button.button({label:"Autocalibrate Bandpass"})
+			self.scroll_data = []
+			self.mode = "skip";
+		}
+
+		var autocal_length_text=$("<input type='number'/>")
+				.attr({min:16,max:4096})
+				.css({'width':'17%','display':'inline','font-size':'16pt', 'margin-top':5})
+				.val(this.autocal_length)
+				.appendTo(wrapper)
+				.change(
+					function(){
+						if (parseInt(this.value) < ($(this).attr("min"))) {this.value=$(this).attr("min")}
+						if (parseInt(this.value) > ($(this).attr("max"))) {this.value=$(this).attr("max")}
+						self.autocal_length = parseInt(this.value);
+					}
+				)
+		autocal_length_text.numeric()
+
+
+	}
+
 
 waterfall.prototype.add_spectrum_excess=
 	function(target){
 		this.freeze_baseline = false
 	    wrapper=$("<div/>").uniqueId().appendTo($("#"+target))
 				.height(200).width(this.plot_width+this.margin[0]/2)
-				.css({position:'relative',float:'left'})
+				.css({position:'relative',float:'left',visible:'false'})
 		spectrum_plot_excess_mean     = {x: [],y: [],type: 'scatter',name:'Mean'}			
 		spectrum_plot_excess_latest   = {x: [],y: [],type: 'scatter',name:'Latest',mode:'markers',
 											marker: {size: 3} }
@@ -792,4 +904,81 @@ waterfall.prototype.add_spectrum_excess=
 		}
 
 		Plotly.newPlot(this.spectrum_excess_plot, data, layout, {staticPlot: true});
+	}
+
+waterfall.prototype.addCCERAPointing=
+	function(target){
+		self=this
+		marg=15
+		wrapper=$("<div/>").uniqueId().appendTo($("#"+target))
+						.css({position:'relative',float:'left',width:'100%'})
+		self.CCERA = {"lat":null,
+					  "lon":null,
+					  "el":null,
+					  "alt":null,
+					  "az":null,
+					  "ra":null,
+					  "dec":null, 
+					  "l":null,
+					  "b":null}
+
+		fetch('http://'+self.kotekan_url+':3000/position')
+				.then(r => r.json().then(data => {
+					self.CCERA.lat = data.lat
+					self.CCERA.lon = data.lon
+					self.CCERA.el = data.el
+					lat.text("Lat: "+data['lat'].toFixed(2)+" deg")
+					lon.text("Lon: "+data['lon'].toFixed(2)+" deg")
+					el.text("Elev: "+data['el'].toFixed(2)+"m")
+					fetch('http://'+self.kotekan_url+':3000/pointing')
+						.then(r => r.json().then(data => {
+						    self.CCERA.alt = data.alt
+							self.CCERA.az = data.az
+						    alt.text("Alt: "+data['alt'].toFixed(2)+" deg")
+						    az.text("Az: "+data['az'].toFixed(2)+" deg")
+
+							ra.text("RA: "+data['ra'].toFixed(2)+" deg")
+						    dec.text("Dec: "+data['dec'].toFixed(2)+" deg")
+						    gl.text("Gal. Lon: "+data['gl'].toFixed(2)+" deg")
+						    gb.text("Gal. Lat: "+data['gb'].toFixed(2)+" deg")
+
+							update_pointing()
+						}))
+			}))
+
+		update_pointing = function(){
+			lat = self.CCERA.lat
+			lon = self.CCERA.lon
+			el  = self.CCERA.el
+			alt = self.CCERA.alt
+			az  = self.CCERA.az
+		}
+
+		var ccerawrap=$('<div/>').uniqueId().css({width:'100%'}).appendTo(wrapper)
+				 .css({'font-family':'sans-serif','font-size':'10pt','text-align':'left','margin':marg})
+		$("<p>").text("Telescope Info").css({'font-size':'14pt','text-align':'center'}).appendTo(ccerawrap)
+		
+		var lcol = $("<div/>").css({width:"50%",float:'left'}).appendTo(ccerawrap)
+		var rcol = $("<div/>").css({width:"50%",float:'right'}).appendTo(ccerawrap)
+
+		var alt = $("<div/>").css({width:"100%"})
+				 .text("Alt: ").appendTo(lcol)
+		var az = $("<div/>").css({width:"100%"})
+				 .text("Az: ").appendTo(lcol)
+		var lat = $("<div/>").css({width:"100%"})
+				 .text("Lat: ").appendTo(lcol)
+		var lon = $("<div/>").css({width:"100%"})
+				 .text("Lon: ").appendTo(lcol)
+		var el = $("<div/>").css({width:"100%"})
+				 .text("Elev: ").appendTo(lcol)
+		var ra = $("<div/>").css({width:"100%"})
+				 .text("RA: ").appendTo(rcol)
+		var dec = $("<div/>").css({width:"100%"})
+				 .text("Dec: ").appendTo(rcol)
+		var gl = $("<div/>").css({width:"100%"})
+				 .text("Gal. Lon: ").appendTo(rcol)
+		var gb = $("<div/>").css({width:"100%"})
+				 .text("Gal. Lat: ").appendTo(rcol)
+
+ 
 	}

@@ -11,15 +11,7 @@
 	<script src="https://cdn.jsdelivr.net/npm/tinycolor2@1.6.0/cjs/tinycolor.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.1/plotly-basic.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.1/plotly-cartesian.min.js"></script>
-	<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.13.6/underscore-min.js"></script>
-
-
-	<script src="lib/xmlrpc.js"></script>
-	<script src="http://fargo.io/code/node/shared/utils.js"></script>
-	<script src="http://fargo.io/code/shared/xml.js"></script>
-
-	
-	<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-xmlrpc/0.4.3/jquery.xmlrpc.min.js"></script>
+	<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.13.6/underscore-min.js"></script>	
 	<script src="lib/img_plotting.js"></script>
 	<script src="waterfall.js"></script>
 	<style>
@@ -41,19 +33,23 @@
 			wf = new waterfall("img_holder");
 			wf.addColorSelect("interaction_tab",['viridis','inferno','magma','plasma','jet','gray','heat'])
 			wf.addColorBar("interaction_tab")
-			wf.addColorSlider("interaction_tab",[-30,30])
+			wf.addColorSlider("interaction_tab",[-20,20])
 			wf.addFreqSlider("interaction_tab",[1416.,1426.])
-			wf.addStartStop("interaction_tab")
 			wf.addBufferControl("interaction_tab")
 			wf.addWaterfallControl("interaction_tab")
 			wf.addLocalRecordButton("interaction_tab")
 			//wf.addRecordButton("interaction_tab")
-			wf.addAirspyGainControl("interaction_tab","airspy_input")
 			//wf.addStatusHeader("status_header")
 			wf.add_spectrum("spectrum_holder")
 
 			wf.add_baseline_control("interaction_tab")
-			wf.add_spectrum_excess("interaction_tab")
+			wf.add_autocal_if("interaction_tab","airspy_input")
+			wf.addCCERAPointing("interaction_tab")
+			wf.add_spectrum_excess("spectrum_holder")
+			wf.addAirspyGainControl("interaction_tab","airspy_input")
+
+			wf.start()
+			wf.addStartStop("interaction_tab")
 		}
 
 	</script>

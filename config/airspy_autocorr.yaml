@@ -42,9 +42,9 @@ freq: 1421.    #MHz
 airspy_input:
   kotekan_stage: airspyInput
   out_buf: input_buf
-  gain_lna: 12 #0-14
-  gain_mix: 13 #0-15
-  gain_if:  13 #0-15
+  gain_lna: 10 #0-14
+  gain_mix: 10 #0-15
+  gain_if:  10 #0-15
   biast_power: false
   autostart: true
 #  serial: 0x03A464C834658167
@@ -93,3 +93,8 @@ correlation_output:
     kotekan_stage: SpawnProcess
     in_buf: post_corr_buf
     exec: "../../python/scripts/js_viewer/livebeam_server.py"
+
+  spawn_ccera_rest:
+    kotekan_stage: SpawnProcess
+    in_buf: post_corr_buf
+    exec: "../../python/scripts/js_viewer/ccera_rest.py"
