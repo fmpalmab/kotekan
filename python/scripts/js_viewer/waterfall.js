@@ -237,13 +237,13 @@ waterfall.prototype.openSocket =
 				  break;
 	       	  	case 2: //timestep
 		       	  var timestamp = new Float64Array(e.data.slice(1,9))[0]
-		       	  while (self.timearr.length>self.waterfall_buffer_length) {self.timearr.shift();}
-		       	  self.timearr.push(timestamp);
 		          var arr = new Float32Array(e.data.slice(9));
 				  if (self.mode === "normal") {
 					while (self.scroll_data.length>self.waterfall_buffer_length) {self.scroll_data.shift();}
 					  self.scroll_data.push(arr);
-				  }
+					while (self.timearr.length>self.waterfall_buffer_length) {self.timearr.shift();}
+					  self.timearr.push(timestamp);
+				   }
 				  else if (self.mode === "bandpass") {
 					self.bandpass_data.push(arr);
 					var percent = self.bandpass_data.length / (self.autocal_length+self.skip_length) * 100
@@ -255,10 +255,12 @@ waterfall.prototype.openSocket =
 					}
 				  }
 				  else if (self.mode === "skip") {
-					var arr = new Float32Array(e.data.slice(9));
+//					var arr = new Float32Array(e.data.slice(9));
 					self.scroll_data.push(arr);
+					self.timearr.push(timestamp);
 					if (self.scroll_data.length >= self.skip_length) {
 						for (i =0; i<self.skip_length; i++) self.scroll_data.shift()
+						for (i =0; i<self.skip_length; i++) self.timearr.shift()
 						self.mode = "normal"
 					}
 				  }
@@ -533,16 +535,19 @@ waterfall.prototype.addLocalRecordButton =
 				.css({'float':'right'})
 				.button({label:'Save Data', icons: {primary: "ui-icon-disk"}})
 				.click(function() {
+					var oldmode = self.mode
+					self.mode = 'idle'
 					file_data = [].concat(new Int32Array([self.num_freqs,self.scroll_data.length]))
 								  .concat(new Float32Array([self.CCERA.alt, self.CCERA.az]))
 								  .concat(new Float32Array(self.freq_list))
 								  .concat(new Float64Array(self.timearr))
 								  .concat(new Float32Array(self.spectrum))
 								  .concat(new Float32Array(self.spectrum_baseline))			
-								  .concat(wf.scroll_data)
+								  .concat(self.scroll_data)
 					download(file_data, self.record_fn.val());
 					self.fn_idx = self.fn_idx+1;
 					self.record_fn.val("output"+("000" + self.fn_idx).slice(-4)+".dat")
+					self.mode = oldmode
 			});
 	}
 
@@ -710,6 +715,7 @@ waterfall.prototype.addAirspyGainControl =
 				.css({'display':'inline-block','float':'right'})
 				.click(function() {
 					self.scroll_data=[]
+					self.timearr=[]
 					self.draw()
 				});
 	}
@@ -873,6 +879,7 @@ waterfall.prototype.add_autocal_if=
 		gather_if_bandpass = function(){
 				self.bandpass_data = []
 				self.scroll_data = []
+				self.timearr = []
 				self.mode = "bandpass"
 			}
 		self.process_if_bandpass = function(){
@@ -977,6 +984,7 @@ waterfall.prototype.addCCERAPointing=
 						    dec.text("Dec: "+data['dec'].toFixed(2)+" deg")
 						    gl.text("Gal. Lon: "+data['gl'].toFixed(2)+" deg")
 						    gb.text("Gal. Lat: "+data['gb'].toFixed(2)+" deg")
+							self.update_galview(data['gl'])
 						}))
 			}))
 		}
@@ -1045,4 +1053,43 @@ waterfall.prototype.addCCERAPointing=
 		update_state()
 		setInterval(update_state,1000)
 
+	}
+
+
+waterfall.prototype.addGalView=
+	function(target, imgsrc){
+		self = this
+		wrapper=$("<div/>").uniqueId().appendTo($("#"+target))
+				.width("100%")
+				.css({position:'relative',float:'left',visible:'false'})
+
+		galimg = $("<img/>").appendTo(wrapper)
+					.attr("src",imgsrc)
+					.attr({width:"100%"})
+					.css({"filter":"invert(100%)"})
+
+		var width = galimg.width()
+		var height = galimg.height()
+
+		var sun_frac_loc = [0.5,1-0.309]
+
+		//$("<div style='position:absolute'/>").uniqueId().appendTo(wrapper)
+		var rr=Raphael(wrapper[0].id,width,height);
+		rr.canvas.style.position="absolute";
+		rr.canvas.style.zIndex="100";
+		rr.setStart()
+		var los = rr.path(["M",width*sun_frac_loc[0],height*sun_frac_loc[1],
+							  "L",width*sun_frac_loc[0],height*sun_frac_loc[1]])
+		los.attr({"arrow-end":"classic-wide-long",})
+		rr.setFinish()
+
+		self.update_galview = function(gl){
+			dx = width*sun_frac_loc[0] - height/2 * Math.sin(gl/360*2*Math.PI)
+			dy = height*sun_frac_loc[1] - height/2 * Math.cos(gl/360*2*Math.PI)
+			los.attr({"path":["M",width*sun_frac_loc[0],height*sun_frac_loc[1],
+							  "L",dx,dy],
+					  "stroke-width":3,
+			})
+		  }
+				
 	}
