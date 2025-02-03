@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<title>Data from Kotekan</title>
+<head>
+	<script src="extlibs/jquery.min.js"></script>
+	<link rel="stylesheet" href="extlibs/jquery-ui.css" />
+	<script src="extlibs/jquery-ui.min.js"></script>
+	<script src="extlibs/d3.v3.min.js" charset="utf-8"></script>
+	<script src="extlibs/jquery.numeric.min.js"></script>
+	<script src="extlibs/raphael.min.js"></script>
+	<script src="extlibs/tinycolor.min.js"></script>
+	<script src="extlibs/plotly-basic.min.js"></script>
+	<script src="extlibs/plotly-cartesian.min.js"></script>
+	<script src="extlibs/underscore-min.js"></script>	
+	<script src='lib/polyfit.js'></script>
+	<script src="lib/img_plotting.js"></script>
+	<script src="waterfall.js"></script>
+	<style>
+		.axis path,
+		.axis line {
+		    fill: none;
+		    stroke: black;
+		    shape-rendering: crispEdges;
+		}
+		.axis text {
+		    font-family: sans-serif;font-family: sans-serif;
+		}
+	</style>
+	<link rel="shortcut icon" href="data:image/x-icon;," type="image/x-icon"> 
+	<script type="text/javascript">
+		var waterfall;
+
+		function init() {
+			wf = new waterfall("img_holder");
+			wf.addColorSelect("interaction_tab",['viridis','inferno','magma','plasma','jet','gray','heat'])
+			wf.addColorBar("interaction_tab")
+			wf.addColorSlider("interaction_tab",[-20,20])
+			wf.addFreqSlider("interaction_tab",[1416.,1426.])
+			wf.addBufferControl("interaction_tab")
+			wf.addWaterfallControl("interaction_tab")
+			wf.addLocalRecordButton("interaction_tab")
+			//wf.addRecordButton("interaction_tab")
+			//wf.addStatusHeader("status_header")
+			wf.add_spectrum("spectrum_holder")
+
+			wf.add_baseline_control("interaction_tab")
+			wf.add_baseline_fitter("interaction_tab")
+			wf.add_autocal_if("interaction_tab","airspy_input")
+			wf.add_baseline_subtract("interaction_tab")
+
+			wf.addCCERAPointing("interaction_tab")
+			wf.add_spectrum_excess("spectrum_holder")
+			wf.addAirspyGainControl("interaction_tab","airspy_input")
+
+			wf.start()
+			wf.addStartStop("interaction_tab")
+		}
+
+	</script>
+</head>
+
+<body onload="init();">
+	<div id="status_header"></div><div style='clear:both'/>
+	<div style="position:relative; float:left">
+		<div id="img_holder" style="position:relative; float:left"></div>
+		<div id="spectrum_holder" style="position:relative; float: left;"></div>
+	</div>
+	<div id="interaction_tab" style="position:relative; float:left; width:400px; margin-left:30px"></div>
+</body>
+
+</html>
