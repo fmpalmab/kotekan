@@ -1068,25 +1068,27 @@ waterfall.prototype.addGalView=
 					.attr({width:"100%"})
 					.css({"filter":"invert(100%)"})
 
-		var width = galimg.width()
-		var height = galimg.height()
+		var w = galimg.width()
+		var h = galimg.height()
 
 		var sun_frac_loc = [0.5,1-0.309]
 
 		//$("<div style='position:absolute'/>").uniqueId().appendTo(wrapper)
-		var rr=Raphael(wrapper[0].id,width,height);
+		var rr=Raphael(wrapper[0].id,w,h);
 		rr.canvas.style.position="absolute";
 		rr.canvas.style.zIndex="100";
 		rr.setStart()
-		var los = rr.path(["M",width*sun_frac_loc[0],height*sun_frac_loc[1],
-							  "L",width*sun_frac_loc[0],height*sun_frac_loc[1]])
+		var los = rr.path(["M",w*sun_frac_loc[0],h*sun_frac_loc[1],
+							  "L",w*sun_frac_loc[0],h*sun_frac_loc[1]])
 		los.attr({"arrow-end":"classic-wide-long",})
 		rr.setFinish()
 
 		self.update_galview = function(gl){
-			dx = width*sun_frac_loc[0] - height/2 * Math.sin(gl/360*2*Math.PI)
-			dy = height*sun_frac_loc[1] - height/2 * Math.cos(gl/360*2*Math.PI)
-			los.attr({"path":["M",width*sun_frac_loc[0],height*sun_frac_loc[1],
+			var h = galimg.height()
+			var w = galimg.width()
+			var dx = w*sun_frac_loc[0] - w/2 * Math.sin(gl/360*2*Math.PI)
+			var dy = h*sun_frac_loc[1] - h/2 * Math.cos(gl/360*2*Math.PI)
+			los.attr({"path":["M",w*sun_frac_loc[0],h*sun_frac_loc[1],
 							  "L",dx,dy],
 					  "stroke-width":3,
 			})
