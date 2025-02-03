@@ -20,7 +20,7 @@ function waterfall(container){
 	this.bandpass_data=[];
 	this.autocal_length=128;
 	this.skip_length=20;
-	this.spectrum_baseline=[];
+	this.spectrum_baseline=Array(this.num_freqs).fill(0);
 	this.timearr=[];
 	this.ms_per_datum=25.;
 	this.freq_list=[];
@@ -119,7 +119,7 @@ function waterfall(container){
 waterfall.prototype.draw =
 	function()  {
 		var self=this
-		if (!(this.mode === "normal")) return
+		if (!((this.mode === "normal") || (this.mode === "stopped"))) return
 		var now = new Date().getTime();
 		var dt = now - (this.time || now);
 		if (dt < 50) return;
@@ -147,9 +147,10 @@ waterfall.prototype.dodraw =
 	 	var c = this.scroll_canvas[0].getContext("2d")
 		c.imageSmoothingEnabled = false;
 		var freq_sc = this.freq_list[this.freq_list.length-1]-this.freq_list[0]
-		var freq_lo = Math.round(this.num_freqs * (this.disp_freq[0]-this.freq_list[0])/freq_sc)
-		var freq_hi = Math.round(this.num_freqs * (this.disp_freq[1]-this.freq_list[0])/freq_sc)
+		var freq_lo = Math.floor(this.num_freqs * (this.disp_freq[0]-this.freq_list[0])/freq_sc)
+		var freq_hi = Math.ceil(this.num_freqs * (this.disp_freq[1]-this.freq_list[0])/freq_sc)
 		var nf = Math.round(freq_hi-freq_lo)
+		if (nf <1) nf=1
 		this.scroll_canvas.attr('width',nf).css({'image-rendering': 'pixelated'})
 		imageData = c.createImageData(nf,this.waterfall_buffer_display_length)
 		for (j=disp_start; j<scd.length; j++){
@@ -222,7 +223,8 @@ waterfall.prototype.openSocket =
 	          	console.log(key,msg[key])
 	          }
      		  self.num_freqs=msg['nfreq'];
-		      self.scroll_canvas.attr('width', self.num_freqs)
+			 this.spectrum_baseline=Array(self.num_freqs).fill(0);
+			  self.scroll_canvas.attr('width', self.num_freqs)
     		  self.scrollbuf_canvas.attr('width', self.num_freqs)
 	       } else {
 	       	  var msgtype = new Int8Array(e.data.slice(0,1))[0]
@@ -420,7 +422,7 @@ waterfall.prototype.addColorSelect =
 			self.li = $( "<li>", {text: item.label});
 			var im = $( "<span/>")
 						.appendTo(self.li)
-						.css('float','right');
+						.css({'right':5,width:'60%',position:'absolute'});
 
 			var rr = Raphael(im[0],"100%",Math.ceil(this.button[0].clientHeight/2));
 			rr.setStart();
@@ -454,7 +456,6 @@ waterfall.prototype.addStartStop =
 				.css({margin:"0 auto",display:"block"})
 				.css({'border':'1px solid'})
 				.click(function() {
-				 //	if ( $( this ).text() === "Stop" ) {
 					if ( self.mode === "stopped" ) {
 						$( this ).button( "option", {label: "Stop", icons: {primary: "ui-icon-stop"}})
 							.css({'border':'3px solid green'})
@@ -507,7 +508,6 @@ function download(bytes, fname)  {
 		let link = document.createElement('a');
 		link.href = window.URL.createObjectURL(blob);
 		link.download = fname;
-		debugger;
 		link.click();
 		window.URL.revokeObjectURL(link.href);
 	}
@@ -533,12 +533,13 @@ waterfall.prototype.addLocalRecordButton =
 				.css({'float':'right'})
 				.button({label:'Save Data', icons: {primary: "ui-icon-disk"}})
 				.click(function() {
-					let file_data = []
-					file_data = file_data.concat(new Int32Array([self.num_freqs,self.scroll_data.length]))
-					file_data = file_data.concat(new Float32Array(self.freq_list))
-					file_data = file_data.concat(new Float32Array(self.spectrum))
-					file_data = file_data.concat(new Float32Array(self.spectrum_baseline))			
-					file_data = file_data.concat(wf.scroll_data)
+					file_data = [].concat(new Int32Array([self.num_freqs,self.scroll_data.length]))
+								  .concat(new Float32Array([self.CCERA.alt, self.CCERA.az]))
+								  .concat(new Float32Array(self.freq_list))
+								  .concat(new Float64Array(self.timearr))
+								  .concat(new Float32Array(self.spectrum))
+								  .concat(new Float32Array(self.spectrum_baseline))			
+								  .concat(wf.scroll_data)
 					download(file_data, self.record_fn.val());
 					self.fn_idx = self.fn_idx+1;
 					self.record_fn.val("output"+("000" + self.fn_idx).slice(-4)+".dat")
@@ -802,19 +803,52 @@ waterfall.prototype.add_baseline_control=
 				.button({label:'Take a Spectral Baseline',icons:{primary: "ui-icon-play"}})
 				.click(function() {
 						self.spectrum_baseline = _.map(_.transpose(self.scroll_data),_mean)
-				});
-
-		self.baseline_check = $("<input type='checkbox'/>").appendTo(wrapper)
-//				.checkboxradio() //{label:'Remove Baseline'})
-//				.on(function(e) {
-//						self.remove_baseline = e.target.is( ":checked" )
-//				});
-
+						self.baseline_check_wrapper.css({visibility:'visible'})
+					});
 	}
 
-function sleep(ms) {
-	return new Promise(resolve => setTimeout(resolve, ms))
-}
+waterfall.prototype.add_baseline_fitter=
+	function(target){
+		self = this
+		wrapper=$("<div/>").uniqueId().appendTo($("#"+target))
+				.css({position:'relative',float:'left'})
+		self.baseline_btn = $("<button/>").appendTo(wrapper)
+				.button({label:'Fit Polynomial Baseline',icons:{primary: "ui-icon-play"}})
+				.click(function() {
+						x=[]
+						y=[]
+						for (idx=0; idx<self.num_freqs; idx++){
+							if (((self.freq_list[idx] > self.disp_freq[0]) &&
+								 (self.freq_list[idx] < 1420.4-0.5)) ||
+								((self.freq_list[idx] < self.disp_freq[1]) &&
+								 (self.freq_list[idx] > 1420.4+0.5))
+								) {
+									x.push(idx)
+									y.push(self.spectrum[idx] - self.spectrum_baseline[idx])
+								}
+						}
+						poly = Polyfit(x, y)
+						solver = poly.getPolynomial(4);
+						var polybase = _.map(Array.from(Array(self.num_freqs).keys()),solver)
+						self.spectrum_baseline = self.spectrum_baseline.map((e,i) => e+polybase[i])
+						self.baseline_check_wrapper.css({visibility:'visible'})
+					});
+	}
+
+waterfall.prototype.add_baseline_subtract=
+	function(target){
+		self=this
+		wrapper=$("<div/>").uniqueId().appendTo($("#"+target))
+						.css({position:'relative',float:'left'})
+						.css({visibility:'hidden'})
+
+		baseline_label = $("<label>").appendTo(wrapper)
+				.text("Remove Baseline from Display")
+		self.baseline_check = $("<input type='checkbox'/>").appendTo(baseline_label)
+				.checkboxradio({icon:false})
+				.click(function(){ self.draw()})
+		self.baseline_check_wrapper = wrapper
+	}
 	
 waterfall.prototype.add_autocal_if=
 	function(target,stage_url){
@@ -822,7 +856,7 @@ waterfall.prototype.add_autocal_if=
 		wrapper=$("<div/>").uniqueId().appendTo($("#"+target))
 						.css({position:'relative',float:'left'})
 		self.bandpass_button = $("<button/>").appendTo(wrapper)
-				.button({label:'Autocalibrate Bandpass',icons:{primary: "ui-icon-play"}})
+				.button({label:'Take 1416MHz Bandpass',icons:{primary: "ui-icon-play"}})
 				.click(function() {
 					fetch('http://'+self.kotekan_url+':'+self.kotekan_port+'/'+stage_url+'/set_config', {
 						mode: 'no-cors',
@@ -857,6 +891,7 @@ waterfall.prototype.add_autocal_if=
 			};
 		
 		resume_data = function(){
+			self.baseline_check_wrapper.css({visibility:'visible'})
 			self.bandpass_button.button({label:"Autocalibrate Bandpass"})
 			self.scroll_data = []
 			self.mode = "skip";
@@ -898,7 +933,7 @@ waterfall.prototype.add_spectrum_excess=
 		var layout = {
 			title: {text:'Excess Spectral Power'},
 			xaxis: {title: {text: 'Frequency (MHz)'},linecolor: 'black',zeroline:false},
-			yaxis: {title: {text: 'Excess Power (dB bits^2)'},linecolor: 'black',zeroline:false,range:[-1,2]},
+			yaxis: {title: {text: 'Excess Power (dB bits^2)'},linecolor: 'black',zeroline:false,range:[-1,4]},
 			margin: {t:30, l:50, r:10, b:40},
 			legend: {xanchor:'right',x:1.0,y:0.}
 		}
@@ -922,7 +957,8 @@ waterfall.prototype.addCCERAPointing=
 					  "l":null,
 					  "b":null}
 
-		fetch('http://'+self.kotekan_url+':3000/position')
+		update_pointing = function() {
+			fetch('http://'+self.kotekan_url+':3000/position')
 				.then(r => r.json().then(data => {
 					self.CCERA.lat = data.lat
 					self.CCERA.lon = data.lon
@@ -941,25 +977,21 @@ waterfall.prototype.addCCERAPointing=
 						    dec.text("Dec: "+data['dec'].toFixed(2)+" deg")
 						    gl.text("Gal. Lon: "+data['gl'].toFixed(2)+" deg")
 						    gb.text("Gal. Lat: "+data['gb'].toFixed(2)+" deg")
-
-							update_pointing()
 						}))
 			}))
-
-		update_pointing = function(){
-			lat = self.CCERA.lat
-			lon = self.CCERA.lon
-			el  = self.CCERA.el
-			alt = self.CCERA.alt
-			az  = self.CCERA.az
 		}
+		update_pointing()
+		setInterval(update_pointing,5000)
 
 		var ccerawrap=$('<div/>').uniqueId().css({width:'100%'}).appendTo(wrapper)
-				 .css({'font-family':'sans-serif','font-size':'10pt','text-align':'left','margin':marg})
+			.css({'position':'relative','float':'left'})
+			.css({'font-family':'sans-serif','font-size':'10pt'})
+
 		$("<p>").text("Telescope Info").css({'font-size':'14pt','text-align':'center'}).appendTo(ccerawrap)
 		
-		var lcol = $("<div/>").css({width:"50%",float:'left'}).appendTo(ccerawrap)
-		var rcol = $("<div/>").css({width:"50%",float:'right'}).appendTo(ccerawrap)
+		var lcol = $("<div/>").css({width:"33%",float:'left'}).appendTo(ccerawrap)
+		var mcol = $("<div/>").css({width:"33%",float:'left'}).appendTo(ccerawrap)
+		var rcol = $("<div/>").css({width:"33%",height:"75px",position:'relative',float:'left'}).appendTo(ccerawrap)
 
 		var alt = $("<div/>").css({width:"100%"})
 				 .text("Alt: ").appendTo(lcol)
@@ -972,13 +1004,45 @@ waterfall.prototype.addCCERAPointing=
 		var el = $("<div/>").css({width:"100%"})
 				 .text("Elev: ").appendTo(lcol)
 		var ra = $("<div/>").css({width:"100%"})
-				 .text("RA: ").appendTo(rcol)
+				 .text("RA: ").appendTo(mcol)
 		var dec = $("<div/>").css({width:"100%"})
-				 .text("Dec: ").appendTo(rcol)
+				 .text("Dec: ").appendTo(mcol)
 		var gl = $("<div/>").css({width:"100%"})
-				 .text("Gal. Lon: ").appendTo(rcol)
+				 .text("Gal. Lon: ").appendTo(mcol)
 		var gb = $("<div/>").css({width:"100%"})
-				 .text("Gal. Lat: ").appendTo(rcol)
+				 .text("Gal. Lat: ").appendTo(mcol)
+		var state =  $("<div/>").css({width:"100%",height:"100%"})
+				 .css({'display':'flex','justify-content':'center','align-items':'center'})
+				 .css({'white-space':'pre-line'})
+				 .css({'text-align':'center','font-size':'12pt'})
+				 .text("STATE").css({'border':'2px solid black','border-radius':'5px'}).appendTo(rcol)
+				 
 
- 
+		update_state = function() {
+			fetch('http://'+self.kotekan_url+':3000/state')
+				.then(r => r.json().then(data => {
+						if (data['state'].startsWith("on source")) {
+							var l = data['state'].split(',')[1].substring(1)
+							console.log(l)
+							data['state'] = "On Source \n"+l
+							state.css({backgroundColor:"#90EE90"})
+						}
+						else if (data['state'].startsWith("slewing")) {
+							data['state'] = "Slewing"
+							state.css({backgroundColor:"#FFDBBB"})
+						}
+						else 
+							state.css({backgroundColor:"white"})
+
+						if (data['expiry']) {
+							time_left = (data['expiry'] - data['now']).toFixed(0)
+							state.text(data['state'] + "\n Dwell:" + time_left + "sec")
+						}
+						else
+							state.text(data['state'])	
+					}))
+				}
+		update_state()
+		setInterval(update_state,1000)
+
 	}

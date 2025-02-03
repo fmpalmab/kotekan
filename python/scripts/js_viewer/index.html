@@ -3,8 +3,8 @@
 <title>Data from Kotekan</title>
 <head>
 	<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js"></script>
-	<link rel="stylesheet" href="http://ajax.googleapis.com/ajax/libs/jqueryui/1.11.2/themes/smoothness/jquery-ui.css" />
-	<script src="http://ajax.googleapis.com/ajax/libs/jqueryui/1.11.2/jquery-ui.min.js"></script>
+	<link rel="stylesheet" href="http://ajax.googleapis.com/ajax/libs/jqueryui/1.12.1/themes/smoothness/jquery-ui.css" />
+	<script src="http://ajax.googleapis.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.js"></script>
 	<script src="http://d3js.org/d3.v3.min.js" charset="utf-8"></script>
 	<script src="https://cdn.jsdelivr.net/npm/jquery-numeric@1.5.0/jquery.numeric.min.js"></script>
 	<script src="https://cdn.jsdelivr.net/npm/raphael@2.3.0/raphael.min.js"></script>
@@ -12,6 +12,7 @@
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.1/plotly-basic.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.1/plotly-cartesian.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.13.6/underscore-min.js"></script>	
+	<script src='lib/polyfit.js'></script>
 	<script src="lib/img_plotting.js"></script>
 	<script src="waterfall.js"></script>
 	<style>
@@ -43,7 +44,10 @@
 			wf.add_spectrum("spectrum_holder")
 
 			wf.add_baseline_control("interaction_tab")
+			wf.add_baseline_fitter("interaction_tab")
 			wf.add_autocal_if("interaction_tab","airspy_input")
+			wf.add_baseline_subtract("interaction_tab")
+
 			wf.addCCERAPointing("interaction_tab")
 			wf.add_spectrum_excess("spectrum_holder")
 			wf.addAirspyGainControl("interaction_tab","airspy_input")
