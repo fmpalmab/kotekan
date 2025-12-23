@@ -1,16 +1,22 @@
 type: config
-log_level: INFO
+log_level: DEBUG
 buffer_depth: 16 #16
-packets_per_frame: 512
-packet_size: 5376 #5482  
+packets_per_frame: 652
+packet_payload_size: 5376
 cpu_affinity: [0,1]
+
+main_pool:
+  kotekan_metadata_pool: chordMetadata
+  num_metadata_objects: packets_per_frame
 
 # Buffer to hold captured network packets
 network_capture_buf:
   kotekan_buffer: standard
   num_frames: buffer_depth
-  frame_size: packets_per_frame * packet_size
+  frame_size:  packets_per_frame * 5632 # packet_payload_size + VDIF_HEADER_LEN
   numa_node: 0
+  metadata_pool: main_pool
+
 
 # DPDK Stage to capture network packets
 dpdk:
@@ -22,20 +28,31 @@ dpdk:
   max_rx_pkt_len: 9000
   num_mbufs: 9600
   handlers:
-    - dpdk_handler: captureHandler # Use captureHandler to capture packets
-      out_buf: network_capture_buf
+    - dpdk_handler: rfsocHandlerCPT # Use captureHandler to capture packets
+      out_buffer: network_capture_buf
+      station_id: 0
 
+ 
 # Monitoring stages 
-hexDump: # print hex dump of captured packets for debugging
-  kotekan_stage: hexDump
+#hexDump: # print hex dump of captured packets for debugging
+#  kotekan_stage: hexDump
+#  in_buf: network_capture_buf
+
+raw_capture:
+  kotekan_stage: nDiskFileWrite
   in_buf: network_capture_buf
+  disk_base: /data
+  disk_set: test
+  num_disks: 1
+  write_to_disk: True
+  write_metadata_and_gains: False
 
 #inspect_frame: # put the buffer into a restserver for inspection
-#  kotekan_stage: packetSequenceCheck
+# kotekan_stage: packetSequenceCheck
 #  in_buf: network_capture_buf
 #  packet_size: 5440
-#  seq_offset: 0
-#  seq_size: 8
+ # seq_offset: 0
+ # seq_size: 8
 
 # future: cudaInputData
 

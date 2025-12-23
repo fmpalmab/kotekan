@@ -30,6 +30,8 @@
 #include "iceBoardShuffle.hpp"  // for iceBoardShuffle
 #include "iceBoardStandard.hpp" // for iceBoardStandard
 #include "iceBoardVDIF.hpp"     // for iceBoardVDIF
+#include "rfsocHandler.hpp"
+#include "rfsocHandlerCPT.hpp"
 
 #include "fmt.hpp"  // for compile_string_to_view, format, fmt, format_string
 #include "json.hpp" // for basic_json, iter_impl, json
@@ -195,6 +197,11 @@ void dpdkCore::create_handlers(bufferContainer& buffer_container) {
         } else if (handler_name == "captureHandler") {
             handlers[port] =
                 new captureHandler(config, handler_unique_name, buffer_container, port);
+        } else if (handler_name == "rfsocHandlerCPT") {
+            handlers[port] =
+                new rfsocHandlerCPT(config, handler_unique_name, buffer_container, port);        
+        } else if (handler_name == "rfsocHandler") {
+            handlers[port] = new rfsocHandler(config, handler_unique_name, buffer_container, port);
         } else if (handler_name == "none") {
             handlers[port] = nullptr;
         } else {
