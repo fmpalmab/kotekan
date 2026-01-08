@@ -52,6 +52,8 @@ BasebandWriter::BasebandWriter(Config& config, const std::string& unique_name,
                       * config.get<uint32_t>(unique_name, "num_elements")
                   + metadata_size;
     in_buf->register_consumer(unique_name);
+
+    INFO("BasebandMetaData size: {:d} bytes", metadata_size);
 }
 
 

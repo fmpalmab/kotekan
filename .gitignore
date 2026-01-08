@@ -20,3 +20,5 @@ docs/sphinx/html/*
 scratch/*
 Manifest*.toml
 *.log
+*.conda
+*.venv
