@@ -58,7 +58,6 @@ add_library(
     VisWriter.cpp
     HFBRawReader.cpp
     restInspectFrame.cpp
-    packetSequenceCheck.cpp
     frbNetworkProcess.cpp
     pulsarNetworkProcess.cpp
     bufferMerge.cpp
