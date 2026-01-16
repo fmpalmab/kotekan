@@ -1,0 +1,67 @@
+type: config
+log_level: INFO
+buffer_depth: 32 #16
+cpu_affinity: [0,1]
+
+num_elements: 32
+n_channels_per_packet: 168
+packets_per_spectrum: 4
+spectra_per_dataset: 15000 
+bytes_per_dataset: n_channels_per_packet * packets_per_spectrum * spectra_per_dataset # 50 ms of data
+
+main_pool:
+  kotekan_metadata_pool: BasebandMetadata
+  num_metadata_objects: buffer_depth
+
+# Buffer to hold captured network packets
+network_capture_buf:
+  kotekan_buffer: standard
+  num_frames: buffer_depth
+  frame_size: bytes_per_dataset * num_elements # 322.560.000 
+  numa_node: 0
+  metadata_pool: main_pool
+
+mask_buffer_zeros:
+  kotekan_buffer: standard
+  num_frames: buffer_depth
+  frame_size: spectra_per_dataset
+  numa_node: 0
+  metadata_pool: main_pool
+
+# DPDK Stage to capture network packets
+dpdk:
+  kotekan_stage: dpdkCore
+  lcore_cpu_map: [3]
+  main_lcore_cpu: 4
+  lcore_port_map:
+    - [0]
+  max_rx_pkt_len: 9000
+  num_mbufs: 9600
+  handlers:
+    - dpdk_handler: rfsocHandler 
+      out_buffer: network_capture_buf
+      alignment: 4000
+      mask_buf: mask_buffer_zeros
+      capture_n_frames: 25 # 50ms * 20 = 1 second of data aprox
+
+zero_samples:
+  kotekan_stage: zeroSamples
+  out_buf: network_capture_buf
+  lost_samples_buf: mask_buffer_zeros
+  zero_value: 0
+  sample_size: 21504 
+
+# Monitoring stages 
+inspect_frame:
+  kotekan_stage: restInspectFrame
+  in_buf: network_capture_buf
+
+raw_file_write:
+  kotekan_stage: BasebandWriter
+  samples_per_data_set: 10080000 # bytes_per_dataset 
+  num_elements: 32 
+  in_buf: network_capture_buf
+  root_path: /data/32_test
+
+
+  

@@ -39,7 +39,7 @@ protected:
     // Config packet constants
     static constexpr uint32_t ETH_IP_UDP_HDR = 42;
     uint32_t packet_size = 5418;
-    uint32_t frame_packets = 256;
+    uint32_t frame_packets = 20480;
 
     uint32_t spectrum_size = 672;
     uint32_t blocks_per_packet = 8;
@@ -189,6 +189,7 @@ inline rfsocHandlerCPT::rfsocHandlerCPT(kotekan::Config& config, const std::stri
 
 
 
+
 inline int rfsocHandlerCPT::handle_packet(struct rte_mbuf* mbuf) {
 
     if (unlikely(!check_packet_basic(mbuf))) {
@@ -245,7 +246,6 @@ inline int rfsocHandlerCPT::handle_packet(struct rte_mbuf* mbuf) {
     }
 
     packets_written_in_frame++;
-
     print_status();
     return 0;
 };

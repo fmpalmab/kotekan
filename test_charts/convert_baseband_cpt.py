@@ -17,19 +17,19 @@ NUM_FREQ = 672
 
 # Kotekan and Raw File Parameters
 METADATA_SIZE = 96
-PACKETS_PER_FRAME = 256
-PACKET_PAYLOAD_SIZE = 5376
+PACKETS_PER_FRAME = 20480
+SPECTRUM_SIZE = 21504
 NUM_POLS = 2 #CPT 2
 NUM_ELEMENTS = NUM_POLS * NUM_FREQ  # NEEDS TO BE REVIWED
 FRAME_PAYLOAD_SIZE = PACKETS_PER_FRAME * PACKET_PAYLOAD_SIZE
-SAMPLES_PER_FRAME = FRAME_PAYLOAD_SIZE // NUM_ELEMENTS  # 1024 time samples per frame
+spectrums_per_frame =   
 TOTAL_FRAME_SIZE = METADATA_SIZE + FRAME_PAYLOAD_SIZE
 
 def read_raw_file(filename):
     filesize = os.path.getsize(filename)
     num_frames = filesize // TOTAL_FRAME_SIZE
     
-    packets_per_frame = PACKETS_PER_FRAME  # 256
+    packets_per_frame = PACKETS_PER_FRAME 
     
     print(f"Reading {filename}...")
     print(f"Size: {filesize} bytes")
@@ -37,24 +37,20 @@ def read_raw_file(filename):
     print(f"Packets per frame: {packets_per_frame}")
     print(f"Samples per frame: {SAMPLES_PER_FRAME}")
 
-    all_packets = []
+    all_spectrum = []
     
     try:
         with open(filename, "rb") as f:
             for _ in range(num_frames):
                 metadata = f.read(METADATA_SIZE)
               
-                for _ in range(packets_per_frame):
-                    packet_data = f.read(PACKET_PAYLOAD_SIZE)
-                    byte_array = np.frombuffer(packet_data, dtype=np.uint8)
+                for _ in range(spectrums_per_frame):
+                    spectrum_data = f.read(SPECTRUM_SIZE)
+                    byte_array = np.frombuffer(spectrum_data, dtype=np.uint8)
+                    byte_array = byte_array.reshape(NUM_FREQ, NUM_ELEMENTS)
                     all_packets.append(byte_array)
-                    
-        if not all_packets:
-            return None
 
-        samples_all = np.stack(all_packets) # (num_frames * packets_per_frame, 5376)
-        samples_all = samples_all.reshape(num_frames, packets_per_frame, 4, NUM_POLS, NUM_FREQ)
-        samples_all = samples_all.reshape(-1, NUM_POLS, NUM_FREQ) # (time, pols, freq)
+
         return samples_all
 
     except Exception as e:
