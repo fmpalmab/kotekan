@@ -30,8 +30,8 @@ public:
                     kotekan::bufferContainer& buffer_container, int port);
 
         int handle_packet(struct rte_mbuf* mbuf) override;
-        void update_stats() override {};
-        
+        void update_stats() override;
+
 protected:
 
         // Output buffer
@@ -43,11 +43,8 @@ protected:
         static constexpr uint32_t ETH_IP_UDP_HDR = 42;
         uint32_t packet_size = 5482; // ip/udp + rfsoc header + payload
 
-
-        
         bool zero_new_frames = true;
         uint64_t packet_index = 0;
-
         uint32_t packets_written_in_frame = 0;
         
 
@@ -55,7 +52,7 @@ protected:
         static constexpr uint32_t subbands = 4;
         uint32_t bytes_per_sb = 0;
         uint32_t bytes_per_spec = 0;
-        uint32_t samples_per_spec = 0;
+
         static constexpr uint32_t rfsoc_header = 64;
         uint32_t payload_len = packet_size - ETH_IP_UDP_HDR - rfsoc_header;
         uint32_t payload_offset = ETH_IP_UDP_HDR + rfsoc_header;
@@ -83,6 +80,8 @@ protected:
         uint64_t rx_out_of_order_total = 0;
         uint64_t rx_error_total = 0;
         uint64_t rx_len_error_total = 0;
+        uint64_t rx_samples_total = 0;
+        uint64_t rx_lost_samples_total = 0;
 
         uint64_t rx_bytes_last = 0;
         uint64_t rx_lost_packets_last = 0;
@@ -94,8 +93,12 @@ protected:
         int mask_frame_id = 0;
 
         std::string mask_name;
-        std::vector<uint8_t> packets_seen; // to track received packets in a spectrum
+        uint64_t specs_per_frame = 0;
+        std::vector<uint8_t> packets_seen;
+        uint64_t valid_specs = 0;
 
+
+        // Capture control
         uint64_t num_frames_captured;
         uint64_t capture_n_frames;
 
@@ -104,18 +107,23 @@ protected:
         uint64_t alignment = 0;  
 
         // For test and start
-        double warmup_time = 3.0; // seconds
+        double warmup_time = 10.0; // seconds
         std::chrono::steady_clock::time_point start_time;
         bool in_warmup = true;
-
-        std::chrono::steady_clock::time_point last_report;
-        std::chrono::steady_clock::time_point last_rate_time;
-        std::chrono::steady_clock::time_point last_stats_time;
-
 
         // Baseband Metadata pointer
         uint64_t event_id = 0;
         uint64_t freq_id = 0;
+
+        // Prometheus metrics
+        kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_packets_total_metric;
+        kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_samples_total_metric;
+        kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_lost_packets_total_metric;
+        kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_lost_samples_total_metric;
+
+        kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_bytes_total_metric;
+        kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_error_total_metric;
+
 
         inline uint64_t extract_seq_le64(const uint8_t* p) const {
             uint64_t v = 0;
@@ -138,62 +146,22 @@ protected:
 
         inline bool check_packet_basic(struct rte_mbuf* mbuf){
             if (unlikely(mbuf == nullptr)) {
-                rx_error_total +=1;
+                
                 return false;
-        }
+            }
 
         const uint32_t pkt_len = rte_pktmbuf_pkt_len(mbuf);
         if (unlikely(pkt_len != packet_size)) {
             rx_error_total +=1;
             rx_len_error_total +=1;
             return false;
-        }
+          }
 
         rx_packets_total +=1;
         rx_bytes_total += pkt_len;
         return true;
-    };
+        };
 
-
-
-    inline void print_status() {    
-        const auto now = std::chrono::steady_clock::now();
-        const double dt =
-            std::chrono::duration_cast<std::chrono::duration<double>>(now - last_stats_time).count(); 
-            
-        if (dt < 1.0) {
-            return;
-        }
-
-        const uint64_t pkts_diff = rx_packets_total - rx_packets_last;
-        const uint64_t lost_diff = rx_lost_packets_total - rx_lost_packets_last;
-        const uint64_t ooo_diff  = rx_out_of_order_total - rx_out_of_order_last; 
-        const uint64_t bytes_diff = rx_bytes_total - rx_bytes_last;    // Rates
-        const double pps = pkts_diff / dt;
-        const double loss_pps = lost_diff / dt;
-        const double mbps = 8.0 * bytes_diff / dt / 1e6;  
-        const uint64_t expected_pkts = pkts_diff + lost_diff;
-        const double loss_pct =
-            (expected_pkts > 0) ? (100.0 * lost_diff / expected_pkts) : 0.0;   
-            
-        WARN(
-        "rfsocHandler | {:.2f}s | "
-        "RX: {:.0f} pkt/s | Lost: {:.2f} pkt/s ({:.3f}%) | "
-        "OOO: {:.2f} pkt/s | Rate: {:.2f} Mbps | ErrTot: {:d}",
-        dt,
-        pps,
-        loss_pps, loss_pct,
-        ooo_diff / dt,
-        mbps,
-        rx_error_total
-        );   
-         // Update snapshots
-        rx_packets_last = rx_packets_total;
-        rx_lost_packets_last = rx_lost_packets_total;
-        rx_out_of_order_last = rx_out_of_order_total;
-        rx_bytes_last = rx_bytes_total;
-        last_stats_time = now;
-    }
     bool align_first_packet(uint64_t seq);
 
     inline bool handle_lost_samples(int64_t lost_units);
@@ -205,24 +173,32 @@ protected:
 
 inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& unique_name,
                                       kotekan::bufferContainer& buffer_container, int port) :
-    dpdkRXhandler(config, unique_name, buffer_container, port){
-
+    dpdkRXhandler(config, unique_name, buffer_container, port), 
+    rx_packets_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_packets_total", unique_name, {"port"})),
+    rx_samples_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_samples_total", unique_name, {"port"})),
+    rx_lost_packets_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_lost_packets_total", unique_name, {"port"})),
+    rx_lost_samples_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_lost_samples_total", unique_name, {"port"})),
+    rx_bytes_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_bytes_total", unique_name, {"port"})),
+    rx_error_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
+        "kotekan_dpdk_rx_error_total", unique_name, {"port"})) 
+    {
         out_buf = buffer_container.get_buffer(
             config.get<std::string>(unique_name, "out_buffer"));
-
         if (!out_buf)
-            FATAL_ERROR("rfsocHandlerCPT: Could not find output buffer {:s} for handler {:s}",
+            FATAL_ERROR("rfsocHandler: Could not find output buffer {:s} for handler {:s}",
                         config.get<std::string>(unique_name, "out_buffer"), unique_name);
-        
         out_buf->register_producer(unique_name.c_str());
 
         mask_buf = buffer_container.get_buffer(
             config.get<std::string>(unique_name, "mask_buf"));
-
         if (!mask_buf)
             FATAL_ERROR("rfsocHandler: Could not find mask buffer {:s} for handler {:s}",
                         config.get<std::string>(unique_name, "mask_buf"), unique_name);
-
         mask_name = unique_name + "_mask";
         mask_buf->register_producer(mask_name.c_str());
         mask_buf->zero_frames();
@@ -231,21 +207,16 @@ inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& un
     
         // Number of frames to capture before stopping, 0 = unlimited
         capture_n_frames = config.get_default<uint64_t>(unique_name, "capture_n_frames", 0);
-        
-        // [FIX] Inicializar contador de frames a 0
         num_frames_captured = 0;
 
         first_packet = false;
-        last_report = std::chrono::steady_clock::now();
-        last_rate_time = std::chrono::steady_clock::now();
-        last_stats_time = std::chrono::steady_clock::now();
         rx_bytes_last = rx_bytes_total;
         header_offset = payload_offset;
         
         bytes_per_sb = payload_len;
         bytes_per_spec = subbands * bytes_per_sb; 
-
-        packets_seen.resize(mask_buf->frame_size, 0); // to track received packets in a spectrum
+        specs_per_frame =  (out_buf->frame_size) / bytes_per_spec;
+        packets_seen.resize(specs_per_frame, 0);
 
         start_time = std::chrono::steady_clock::now();
 
@@ -253,7 +224,6 @@ inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& un
 
 
 inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
-
 
     if (in_warmup) {
         const auto now = std::chrono::steady_clock::now();
@@ -272,10 +242,14 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
     const uint8_t* pkt = rte_pktmbuf_mtod(mbuf, const uint8_t*);
     cur_seq = extract_seq_le64(pkt + ETH_IP_UDP_HDR);
     subband = extract_subband_le8(pkt + ETH_IP_UDP_HDR + 8);
+
+    DEBUG("rfsocHandler: Packet seq: {:d}, subband: {:d}", cur_seq, subband);
+
+
     cur_spec = (cur_seq >> 2);  //  one spec are 4 packets
 
-    timestamp_sec = extract_timestamp_le32(pkt + ETH_IP_UDP_HDR + 9);
-    timestamp_micro = extract_timestamp_le32(pkt + ETH_IP_UDP_HDR + 13);
+    timestamp_micro = extract_timestamp_le32(pkt + ETH_IP_UDP_HDR + 9);
+    timestamp_sec = extract_timestamp_le32(pkt + ETH_IP_UDP_HDR + 13);
 
     if (unlikely(subband >= subbands)) {    
         INFO("rfsocHandler: Invalid subband number {:d} in packet. Discarding packet.", subband);
@@ -299,15 +273,12 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
     if (unlikely(seq_diff > 1)) {
         if (unlikely(!handle_lost_samples(seq_diff - 1)))
             return -1;
-        //printf("RFSOC Handler: Lost packets detected. Lost: %ld\n", seq_diff - 1);
     }
 
 
     if (unlikely(!copy_packet(mbuf))) {
-        INFO("rfsocHandler: Stopping capture due to frame advance failure.");
         return -1;
     }
-    print_status();
 
     last_seq = cur_seq;
 
@@ -363,8 +334,15 @@ inline bool rfsocHandler::handle_lost_samples(int64_t lost_units) {
 
 inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
 
-    std::fill(packets_seen.begin(), packets_seen.end(), 0); // reset tracking
     if (!first_time) {
+
+        // Check for lost samples in the previous frame
+        for (uint64_t i =0; i < specs_per_frame; i++) {
+            if (packets_seen[i] != 0x0F) { // 4 subbands missing
+                rx_lost_samples_total +=1;
+            }
+        }
+
         //out_buf->allocate_new_metadata_object(out_frame_id);
         out_buf->mark_frame_full(unique_name, out_frame_id);
         out_frame_id = (out_frame_id + 1) % out_buf->num_frames;
@@ -376,6 +354,9 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
         num_frames_captured++;
 
     }
+
+    std::fill(packets_seen.begin(), packets_seen.end(), 0); // reset tracking
+
     if (capture_n_frames != 0 && num_frames_captured >= capture_n_frames) {
         INFO("rfsocHandler: Reached the configured number of frames to capture ({:d}). Stopping capture.",
              capture_n_frames);
@@ -392,7 +373,7 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
         return false;
     }
 
-    std::memset(mask_frame, 1, mask_buf->frame_size);
+    std::memset(mask_frame, 1, specs_per_frame); // set all to missing
     frame_start_spec = new_spec;
 
     // Set metadata values
@@ -402,6 +383,9 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
     out_metadata->event_id = 0;
     out_metadata->freq_id = 0;
 
+    uint64_t time0_fpga = ((uint64_t)timestamp_sec) * 1000000ULL + ((uint64_t)timestamp_micro);
+    out_metadata->time0_fpga = time0_fpga;
+    out_metadata->frame_fpga_seq = frame_start_spec; // spec (sample) number
     return true;
 }
 
@@ -417,7 +401,7 @@ inline bool rfsocHandler::copy_packet(struct rte_mbuf* mbuf) {
 
     uint64_t spec_loc = spec_id - frame_start_spec; // location in specs
 
-    if (spec_loc >= packets_seen.size()) {
+    if (spec_loc >= specs_per_frame) { // need to advance frame
         if (!advance_frame(spec_id)) return false;
         spec_loc = 0;
     }
@@ -437,19 +421,57 @@ inline bool rfsocHandler::copy_packet(struct rte_mbuf* mbuf) {
     uint8_t& seen = packets_seen[spec_loc];
     const uint8_t bit = uint8_t(1u << subband);
     if (seen & bit) {
-        // duplicado de esa subband
         return true;
     }
-    seen |= bit;
 
+    seen |= bit;
     if (seen == 0x0F) { // 4 subbands recibidas
         mask_frame[spec_loc] = 0;
-        printf("Frame spec complete\n");
+        valid_specs++;
+        rx_samples_total += 1;
+
     }
     return true;
 }
 
 
-#endif 
+inline void rfsocHandler::update_stats() {
+    std::vector<std::string> port_label = {std::to_string(port)};
+    rx_packets_total_metric.labels(port_label).set(rx_packets_total);
+    rx_samples_total_metric.labels(port_label).set(rx_samples_total);
+    rx_lost_packets_total_metric.labels(port_label).set(rx_lost_packets_total);
+    rx_lost_samples_total_metric.labels(port_label).set(rx_lost_samples_total);
 
-// RFSOC_HANDLER_CPT_HPP
+    rx_bytes_total_metric.labels(port_label).set(rx_bytes_total);
+    rx_error_total_metric.labels(port_label).set(rx_error_total);
+    
+    double time_now = e_time();
+    static double last_status_message_time = 0.0;
+    const double status_cadence = 1.0; // seconds
+
+    if ((time_now - last_status_message_time) > status_cadence) {
+
+        const uint64_t d_packets = rx_packets_total - rx_packets_last;
+        const uint64_t d_lost = rx_lost_packets_total - rx_lost_packets_last;
+        const uint64_t d_bytes =rx_bytes_total - rx_bytes_last;
+
+        const double mbps = (double)d_bytes * 8.0 / (status_cadence * 1e6);
+
+        INFO(
+            "RFSoC port {:d} | RX pkt {:d} (+{:d}) | lost {:d} (+{:d}) | "
+            " {:.2f} Mb/s | Samples {:d}",
+            port,
+            rx_packets_total, d_packets,
+            rx_lost_packets_total, d_lost,
+            mbps,
+            rx_samples_total    
+        );
+
+        rx_packets_last = rx_packets_total;
+        rx_lost_packets_last = rx_lost_packets_total;
+        rx_bytes_last = rx_bytes_total;
+
+        last_status_message_time = time_now;
+    }
+}
+#endif 
