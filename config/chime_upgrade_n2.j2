@@ -27,9 +27,10 @@ num_polarizations: 2
 num_freq_host_buf: 1
 num_freq_gpu_buf: 16
 num_frequencies: num_freq_gpu_buf # from Erik's FEngine test
+num_ev: 4                         # from CHIME science run
 samples_per_frame: 16384
 num_times: samples_per_frame      # from Erik's FEngine test
-host_buffer_depth: 32
+host_buffer_depth: 3*272 # == baseband_buffer_depth
 buffer_depth: 4                   # matches Erik's FEngine test
 num_gpus: 2
 cpu_affinity: [0, 10, 11, 12, 13, 14, 15, 16, 16, 18, 19]
@@ -61,9 +62,14 @@ telescope:
   require_frequency_map: true # Make sure we have the full frequency map
   allow_default_frequency_map: false # Don't fall back on default map
 
+dataset_manager:
+  use_dataset_broker: False
+
 main_pool:
   kotekan_metadata_pool: chordMetadata
-  num_metadata_objects: 30 * host_buffer_depth
+  num_metadata_objects: 30 * buffer_depth + 5 * host_buffer_depth
+                        + 100 * 8 * buffer_depth # This part is for the sk/var output.
+
 
 n2_pool:
     kotekan_metadata_pool: N2Metadata
@@ -142,7 +148,7 @@ host_pl_expanded_mask_ringbuffer:
 vis_5s_buffer:
     kotekan_buffer: N2
     num_ev: 0 # only allowed, whatever it may be...
-    vis_layout: "FullUpperTri"
+    n2_layout: "FullUpperTri"
     num_frames: buffer_depth * num_frequencies
     metadata_pool: n2_pool
 
