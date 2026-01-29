@@ -366,11 +366,11 @@ debug_dump_voltage:
 #        file_name: lost_samples_{{ id }}
 #        max_frames: 10
 #{%- endfor %}
-    write_n2_vis:
-        kotekan_stage: hdf5FileWrite
-        in_buf: vis_5s_buffer
-        file_name: n2_vis
-        max_frames: 10
+#    write_n2_vis:
+#        kotekan_stage: hdf5FileWrite
+#        in_buf: vis_5s_buffer
+#        file_name: n2_vis
+#        max_frames: 10
 
 # from Erik's FEngine test input files
 {% include "fengine/include/rfi_chime.j2" %}
@@ -543,3 +543,21 @@ vis_accumulate:
     num_elements: n2k_correlation_num_elements
     num_ev: 0 # only allowed, whatever it may be...
 
+vis_pool:
+    kotekan_metadata_pool: VisMetadata
+    num_metadata_objects: 16 * buffer_depth # same as n2_pool
+
+vis_buffer:
+    kotekan_buffer: vis
+    metadata_pool: vis_pool
+    num_frames: buffer_depth * num_frequencies
+
+vis_convert:
+    kotekan_stage: n2FrameToVisFrame
+    n2_buf: vis_5s_buffer
+    vis_buf: vis_buffer
+
+write_vis:
+    log_level: Debug
+    kotekan_stage: VisWriter
+    in_buf: vis_buffer
