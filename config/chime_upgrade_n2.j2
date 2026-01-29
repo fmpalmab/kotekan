@@ -531,6 +531,7 @@ vis_accumulate:
     in_rfimask_buf: host_rfi_RFImask_buffer
     out_buf: vis_5s_buffer
     packet_loss_is_scalar: True
+    num_threads: 3
     # TODO: this should use a ceil or similar, NB: frame_arrival_period is really frame_arrive_rate
     num_n2k_samples_to_accumulate: (5 * frame_arrival_period * n2k_num_subintegrations)/2 * 2
     # these recap values from cudaCorrelator
