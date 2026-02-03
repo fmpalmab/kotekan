@@ -41,6 +41,7 @@ EigenN2Iter::EigenN2Iter(Config& config, const std::string& unique_name,
     Stage(config, unique_name, buffer_container, std::bind(&EigenN2Iter::main_thread, this)),
 
     in_buf(get_buffer("in_buf")), out_buf(get_buffer("out_buf")),
+    failed_buf(config.exists(unique_name, "failed_buf") ? get_buffer("failed_buf") : nullptr),
 
     _num_eigenvectors(config.get<size_t>(unique_name, "num_ev")),
 
@@ -96,6 +97,32 @@ EigenN2Iter::EigenN2Iter(Config& config, const std::string& unique_name,
                     out_desc->get_num_ev(), _num_eigenvectors);
     }
 
+    if (failed_buf) {
+        failed_buf->register_producer(unique_name);
+        if (in_buf->buffer_type != "N2" || failed_buf->buffer_type != "N2")
+            FATAL_ERROR("EigenN2Iter stage requires 'N2' buffers as input and output.");
+
+        // Validate that input and output buffers have N2 frame descriptors set
+        auto in_desc =
+            std::dynamic_pointer_cast<const kotekan::N2FrameDesc>(in_buf->get_frame_description());
+        auto failed_desc = std::dynamic_pointer_cast<const kotekan::N2FrameDesc>(
+            failed_buf->get_frame_description());
+        if (!in_desc || !failed_desc) {
+            FATAL_ERROR("EigenN2Iter: Input and output buffers must have N2FrameDesc set");
+        }
+        // Validate num_elements and layout match
+        if (in_desc->get_num_elements() != failed_desc->get_num_elements()) {
+            FATAL_ERROR("EigenN2Iter: Input and output buffer num_elements must match");
+        }
+        if (in_desc->get_n2_layout() != failed_desc->get_n2_layout()) {
+            FATAL_ERROR("EigenN2Iter: Input and output buffer n2_layout must match");
+        }
+        // Validate output buffer has correct num_ev for this stage
+        if (failed_desc->get_num_ev() != 0) {
+            FATAL_ERROR("EigenN2Iter: Failed buffer num_ev ({:d}) not 0", out_desc->get_num_ev());
+        }
+    }
+
     if (_num_ev_conv > _num_eigenvectors)
         FATAL_ERROR("The `num_ev_conv` config parameter ({:d}) must be less than or equal to "
                     "`num_ev` ({:d}).",
@@ -114,6 +141,7 @@ void EigenN2Iter::main_thread() {
 
     frameID input_frame_id(in_buf);
     frameID output_frame_id(out_buf);
+    frameID failed_frame_id(failed_buf);
 
     DynamicHermitian<float> mask;
     uint32_t num_elements = 0;
@@ -163,6 +191,18 @@ void EigenN2Iter::main_thread() {
         } catch (const std::runtime_error& e) {
             ERROR("Could not find eigenvalues after {:d} for frame fpga_seq {:d}: {:s}",
                   _max_iterations, input_frame.fpga_start_tick, e.what());
+
+            if (failed_buf != nullptr) {
+                if (failed_buf->wait_for_empty_frame(unique_name, failed_frame_id) == nullptr) {
+                    break;
+                }
+
+                in_buf->pass_metadata(input_frame_id, failed_buf, failed_frame_id);
+                N2FrameView failed_frame(failed_buf, failed_frame_id);
+                failed_frame.copy_data(input_frame, {});
+
+                failed_buf->mark_frame_full(unique_name, failed_frame_id++);
+            }
             in_buf->mark_frame_empty(unique_name, input_frame_id++);
             continue;
         }

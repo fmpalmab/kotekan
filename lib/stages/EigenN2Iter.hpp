@@ -44,6 +44,10 @@
  * @buffer out_buf Output stream with the calculated eigen-pairs.
  *         @buffer_format N2Buffer structured
  *         @buffer_metadata N2Metadata
+ * @buffer failed_buf Output stream to which buffers for which eigenvalues
+ *         cannot be computed are sent. Leave empty to drop these frames.
+ *         @buffer_format N2Buffer structured
+ *         @buffer_metadata N2Metadata
  *
  * @conf  num_elements     Int. The number of elements (i.e. inputs) in the
  *                         correlator data.
@@ -103,6 +107,7 @@ private:
 
     Buffer* in_buf;
     Buffer* out_buf;
+    Buffer* failed_buf;
 
     const size_t _num_eigenvectors;
 
