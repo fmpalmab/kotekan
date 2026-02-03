@@ -28,6 +28,7 @@ num_freq_host_buf: 1
 num_freq_gpu_buf: 16
 num_frequencies: num_freq_gpu_buf # from Erik's FEngine test
 num_ev: 4                         # from CHIME science run
+num_ev_to_calculate: 4       # from n2 test case
 samples_per_frame: 16384
 num_times: samples_per_frame      # from Erik's FEngine test
 host_buffer_depth: 3*272 # == baseband_buffer_depth
@@ -73,7 +74,7 @@ main_pool:
 
 n2_pool:
     kotekan_metadata_pool: N2Metadata
-    num_metadata_objects: 16 * buffer_depth
+    num_metadata_objects: num_freq_gpu_buf * buffer_depth
 
 host_voltage_buffers:
   num_frames: host_buffer_depth
@@ -145,19 +146,27 @@ host_pl_expanded_mask_ringbuffer:
 
 
 # from N2 test case
-vis_5s_buffer:
+vis_10s_buffer:
     kotekan_buffer: N2
-    num_ev: 0 # only allowed, whatever it may be...
+    num_ev: 0
     n2_layout: "FullUpperTri"
     num_frames: buffer_depth * num_frequencies
     metadata_pool: n2_pool
+
+eig_10s_buffer:
+    kotekan_buffer: N2
+    num_ev: num_ev_to_calculate
+    n2_layout: "FullUpperTri"
+    num_frames: buffer_depth * num_frequencies
+    metadata_pool: n2_pool
+
 
 # This configuration assumes that the system ports are ordered in as 4x10G
 # links for each QSFP+, and that each QSFP+ port comes from exactly one iceBoard
 # and that each iceBoard is in a _different_ crate pair, but also in the same
 # location in terms of slot, crate (within the crate pair), and link (on the board).
 dpdk:
-  log_level: DEBUG2
+  log_level: INFO
   kotekan_stage: dpdkCore
   # Format is index = lcore, value = cpu core
   lcore_cpu_map: [4,5,6,7,36,37,38,39]
@@ -524,25 +533,52 @@ run_recv_rfi_RFImask:
 #          ring_buffer_size: buffer_depth * output_size
 #          out_buf: host_rfi_SKbartilde_buffer
 
-#dbg_write_voltages:
-#{%- for id in range(16) %}
-#    kotekan_stage: hdf5FileWrite
-#    base_dir: debug-data
-#    in_buf: host_voltage_buffer_{{ id }}
-#    file_name: voltage_{{ id }}
-#    max_frames: 100
-#{%- endfor %}
+# {%- for id in range(16) %}
+# dbg_write_voltages_{{ id }}:
+#     kotekan_stage: hdf5FileWrite
+#     base_dir: debug-data
+#     in_buf: host_voltage_buffer_{{ id }}
+#     file_name: voltage_{{ id }}
+#     max_frames: 1000
+# {%- endfor %}
+#
+# {%- for id in range(4) %}
+# dbg_write_lostsamples_{{ id }}:
+#     kotekan_stage: hdf5FileWrite
+#     base_dir: debug-data
+#     in_buf: lost_samples_buffer_{{ id }}
+#     file_name: lost_samples_{{ id }}
+#     max_frames: 1000
+# {%- endfor %}
+
+##{%- for id in range(16) %}
+##dbg_read_voltages_{{ id }}:
+##    kotekan_stage: hdf5FileRead
+##    input_dir: debug-data
+##    out_buf: host_voltage_buffer_{{ id }}
+##    file_name: voltage_{{ id }}
+##    loop_size: 100
+##{%- endfor %}
+##
+##{%- for id in range(4) %}
+##dbg_read_lostsamples_{{ id }}:
+##    kotekan_stage: hdf5FileRead
+##    input_dir: debug-data
+##    out_buf: lost_samples_buffer_{{ id }}
+##    file_name: lost_samples_{{ id }}
+##    loop_size: 100
+##{%- endfor %}
 
 vis_accumulate:
     kotekan_stage: N2AccumulateCHIME
     in_buf: host_n2k_correlation_buffer
     in_counts_buf: host_n2k_counts_buffer
     in_rfimask_buf: host_rfi_RFImask_buffer
-    out_buf: vis_5s_buffer
+    out_buf: vis_10s_buffer
     packet_loss_is_scalar: True
     num_threads: 3
     # TODO: this should use a ceil or similar, NB: frame_arrival_period is really frame_arrive_rate
-    num_n2k_samples_to_accumulate: (5 * frame_arrival_period * n2k_num_subintegrations)/2 * 2
+    num_n2k_samples_to_accumulate: (10 * frame_arrival_period * n2k_num_subintegrations)/2 * 2
     # these recap values from cudaCorrelator
     num_freq_per_n2k_frame: num_frequencies
     samples_per_data_set: n2k_samples_per_data_set
@@ -552,9 +588,22 @@ vis_accumulate:
     num_elements: n2k_correlation_num_elements
     num_ev: 0 # only allowed, whatever it may be...
 
+eigencalc:
+    kotekan_stage: EigenN2Iter
+    num_ev: num_ev_to_calculate
+    in_buf: vis_10s_buffer
+    out_buf: eig_10s_buffer
+    # Convergence config from test case
+    tol_eval: 0.001
+    tol_evec: 0.01
+    max_iterations: 10
+    num_ev_conv: 2
+    krylov: 2
+    subspace: 1
+
 vis_pool:
     kotekan_metadata_pool: VisMetadata
-    num_metadata_objects: 16 * buffer_depth # same as n2_pool
+    num_metadata_objects: num_freq_gpu_buf * buffer_depth # same as n2_pool
 
 vis_buffer:
     kotekan_buffer: vis
@@ -563,10 +612,11 @@ vis_buffer:
 
 vis_convert:
     kotekan_stage: n2FrameToVisFrame
-    n2_buf: vis_5s_buffer
+    n2_buf: eig_10s_buffer
     vis_buf: vis_buffer
 
 write_vis:
-    log_level: Debug
     kotekan_stage: VisWriter
+    file_type: raw
     in_buf: vis_buffer
+    total_frames: 2
