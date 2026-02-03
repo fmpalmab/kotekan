@@ -42,6 +42,7 @@ class hdf5FileRead : public kotekan::Stage {
     const int host_pool_rank = config.get_default<int>(unique_name, "frequency_pool_rank", 0);
     const int host_pool_size = config.get_default<int>(unique_name, "frequency_pool_size", 1);
     const bool do_once = config.get_default<bool>(unique_name, "do_once", false);
+    const int loop_size = config.get_default<int>(unique_name, "loop_size", 0);
 
     Buffer* const buffer;
 
@@ -64,6 +65,8 @@ public:
             "kotekan_hdf5fileread_read_time_seconds", unique_name);
 
         for (int frame_index = 0;; ++frame_index) {
+            if (loop_size)
+                frame_index = frame_index % loop_size;
             const int frame_id = frame_index % buffer->num_frames;
 
         wait:
