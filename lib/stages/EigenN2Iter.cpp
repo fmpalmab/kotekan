@@ -156,9 +156,16 @@ void EigenN2Iter::main_thread() {
         DynamicHermitian<cfloat> vis = to_blaze_herm(input_frame.vis);
 
         // Perform the actual eigen-decomposition
-        std::tie(eigpair, stats) =
-            eigen_masked_subspace(vis, mask, _num_eigenvectors, _tol_eval, _tol_evec,
-                                  _max_iterations, _num_ev_conv, _krylov, _subspace);
+        try {
+            std::tie(eigpair, stats) =
+                eigen_masked_subspace(vis, mask, _num_eigenvectors, _tol_eval, _tol_evec,
+                                      _max_iterations, _num_ev_conv, _krylov, _subspace);
+        } catch (const std::runtime_error& e) {
+            ERROR("Could not find eigenvalues after {:d} for frame fpga_seq {:d}: {:s}",
+                  _max_iterations, input_frame.fpga_start_tick, e.what());
+            in_buf->mark_frame_empty(unique_name, input_frame_id++);
+            continue;
+        }
         auto& evals = eigpair.first;
         auto& evecs = eigpair.second;
 
