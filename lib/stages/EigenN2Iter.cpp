@@ -199,7 +199,7 @@ void EigenN2Iter::main_thread() {
 
                 in_buf->pass_metadata(input_frame_id, failed_buf, failed_frame_id);
                 N2FrameView failed_frame(failed_buf, failed_frame_id);
-                failed_frame.copy_data(input_frame, {});
+                failed_frame.copy_data(input_frame, {N2Field::eval, N2Field::evec, N2Field::erms});
 
                 failed_buf->mark_frame_full(unique_name, failed_frame_id++);
             }
