@@ -3,6 +3,7 @@ import numpy as np
 import h5py
 import os
 import argparse
+import glob
 
 # RFSoC / Instrument Parameters
 DELTA_TIME = 10/3 # microseconds
@@ -21,7 +22,6 @@ FRAME_SIZE = METADATA_SIZE + SPECTRA_PER_FRAME * SPECTRUM_SIZE
 # File output parameters: objective is 500 MB files
 FREQ_CHUNK = 672//8 
 MAX_SAMPLES_CHUNK = 186000 # aprox 0.56 sec 
-OUTDIR = "/hdd/32_test/
 
 buffers = {}
 time_counters = {}
@@ -33,8 +33,12 @@ for f0 in range(0, NUM_FREQ, FREQ_CHUNK):
     time_counters[f0] = 0
     file_indices[f0] = 0
     first_sample_index[f0] = None
+    
+    
 
-def stream_raw_file(filename, process_spectrum):
+def stream_raw_file(filename, process_spectrum, outdir_base):
+    
+    global OUTDIR
 
     filesize = os.path.getsize(filename)
     num_frames = filesize // FRAME_SIZE
@@ -55,7 +59,11 @@ def stream_raw_file(filename, process_spectrum):
         
                 start_time_us_global = (time0_fpga * 3 + frame_fpga_seq * 10) // 3
 
-                print(f"Start time global (us): {start_time_us_global}")
+                folder_time = datetime.datetime.fromtimestamp(
+                    start_time_us_global / 1_000_000, tz=datetime.timezone.utc
+                ).strftime("%y%m%dT%H%M%SZ")
+                OUTDIR = os.path.join(outdir_base, f"{folder_time}_CHARTS_hdf5")
+                os.makedirs(OUTDIR, exist_ok=True)
 
             for _ in range(SPECTRA_PER_FRAME):
 
@@ -98,8 +106,10 @@ def process_spectrum(spec, global_sample_index, start_time_us_global):
                 buffers[f0],
                 f0,
                 f1,
+                first_sample,
                 start_time_file_us,
                 file_indices[f0]
+                
             )
 
             buffers[f0] = []
@@ -108,7 +118,7 @@ def process_spectrum(spec, global_sample_index, start_time_us_global):
             first_sample_index[f0] = None
 
 
-def write_hdf5(buffer, f0, f1, start_time_us, idx):
+def write_hdf5(buffer, f0, f1, first_sample_idx, start_time_us, idx):
 
     data = np.stack(buffer, axis=-1)  # (ant, freq, time)
 
@@ -120,33 +130,96 @@ def write_hdf5(buffer, f0, f1, start_time_us, idx):
 
     with h5py.File(os.path.join(OUTDIR, fname), "w") as f:
 
-        f.attrs["start_time_utc_us"] = start_time_us
+        
+        f.attrs["freq_start_idx"] = f0
+        f.attrs["freq_end_idx"] = f1
+        f.attrs["first_sample_idx"] = first_sample_idx
+        f.attrs["time_len"] = data.shape[2]
+        
+        if start_time_us is not None:
+            f.attrs["start_time_utc_us"] = start_time_us
         f.attrs["delta_time_us"] = DELTA_TIME
         f.attrs["freq_start_MHz"] = FREQ_0 + f0 * DELTA_FREQ
         f.attrs["delta_freq_MHz"] = DELTA_FREQ
 
         dset = f.create_dataset("baseband", data=data, dtype=np.uint8)
         dset.attrs["axes"] = ["antenna", "frequency", "time"]
+        
+        
+def create_vds(outdir, vds_name="baseband_virtual.h5"):
+
+
+    files = sorted(glob.glob(os.path.join(outdir, "bb_f*_chunk*.h5")))
+    if len(files) == 0:
+        raise RuntimeError("No chunked HDF5 files found to build VDS")
+
+
+    time_max = 0
+    for fname in files:
+        with h5py.File(fname, "r") as f:
+            t0 = int(f.attrs["first_sample_idx"])
+            tlen = int(f.attrs["time_len"])
+            time_max = max(time_max, t0 + tlen)
+
+    print(f"[VDS] Total time samples: {time_max}")
+
+    layout = h5py.VirtualLayout(
+        shape=(NUM_ELEMENTS, NUM_FREQ, time_max),
+        dtype=np.uint8
+    )
+
+    for fname in files:
+        with h5py.File(fname, "r") as f:
+            dset = f["baseband"]
+
+            f0 = int(f.attrs["freq_start_idx"])
+            f1 = int(f.attrs["freq_end_idx"])
+            t0 = int(f.attrs["first_sample_idx"])
+            t1 = t0 + int(f.attrs["time_len"])
+
+            vsource = h5py.VirtualSource(
+                fname,
+                "baseband",
+                shape=dset.shape
+            )
+
+            layout[:, f0:f1, t0:t1] = vsource
+
+    vds_path = os.path.join(outdir, vds_name)
+    with h5py.File(vds_path, "w") as f:
+        dset = f.create_virtual_dataset("baseband", layout)
+        dset.attrs["axes"] = ["antenna", "frequency", "time"]
+        dset.attrs["description"] = "Virtual baseband dataset (CHARTS)"
+
+    print(f"[VDS] Created: {vds_path}")
 
 
 def main():
 
-    global buffers, time_counters, file_indices
+    global buffers, time_counters, file_indices, first_sample_index
     ap = argparse.ArgumentParser()
     ap.add_argument("raw_file", help="Input Kotekan raw baseband file")
+    ap.add_argument("--outdir-base", help="Output base directory", default="/hdd")
     args = ap.parse_args()
 
-    stream_raw_file(args.raw_file, process_spectrum)    
+    stream_raw_file(args.raw_file, process_spectrum, args.outdir_base)
 
     for f0 in buffers:
         if time_counters[f0] > 0:
+            
+            first_sample = first_sample_index[f0]
+            
+            start_time_file_us = None
+            print("Writing final chunk for freq range", f0, "to", min(f0 + FREQ_CHUNK, NUM_FREQ))
             write_hdf5(
                 buffers[f0],
                 f0,
                 min(f0 + FREQ_CHUNK, NUM_FREQ),
-                None,
+                first_sample,
+                start_time_file_us,
                 file_indices[f0]
             )
+    create_vds(OUTDIR)
 
 if __name__ == "__main__":
     main()
