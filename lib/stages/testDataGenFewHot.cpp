@@ -77,9 +77,10 @@ void testDataGenFewHot::main_thread() {
         chordmeta->set_first_packet_recv_time(now);
 
         chordmeta->set_name("E");
-        chordmeta->dims = 2;
-        chordmeta->set_array_dimension(0, samples_per_dataset, "T");
-        chordmeta->set_array_dimension(1, NUM_ELEMNS, "E");
+        chordmeta->dims = 3;
+        chordmeta->set_array_dimension(0, 1, "F");
+        chordmeta->set_array_dimension(1, samples_per_dataset, "T");
+        chordmeta->set_array_dimension(2, NUM_ELEMNS, "E");
         chordmeta->set_strides_simple();
         chordmeta->type = kotekan::int4x2_swapped_withoffset;
         assert(NUM_FREQ <= CHORD_META_MAX_FREQ);
@@ -98,7 +99,8 @@ void testDataGenFewHot::main_thread() {
         chordmeta->set_frame_counter(seq_num);
 
         buf->allocate_ndarray_frame_desc<kotekan::GetType<kotekan::int4x2_swapped_withoffset>::type,
-                                         2>("E", {samples_per_dataset, NUM_ELEMNS}, {"T", "E"});
+                                         3>("E", {1, samples_per_dataset, NUM_ELEMNS},
+                                            {"F", "T", "E"});
         /* test that things are consistent */
         chordmeta->check_frame_desc(buf->get_ndarray_frame_desc());
 
