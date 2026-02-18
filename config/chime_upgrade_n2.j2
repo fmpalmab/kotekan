@@ -376,6 +376,7 @@ set_scatter_indices:
     kotekan_stage: givenDataGen
     out_buf: host_scatter_indices_buffer
     name: scatter_indices
+    do_once: yes
     # really this should be [4,2,256] ["C", "P", "A"]
     array_shape: [2, 1024]
     dim_name: ["P", "D"]
