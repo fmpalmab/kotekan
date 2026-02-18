@@ -62,6 +62,7 @@ add_library(
     bufferCopy.cpp
     bufferSwitch.cpp
     bufferDelay.cpp
+    bufferQuiet.cpp
     BufferSplit.cpp
     InputSubset.cpp
     $<$<BOOL:${Julia_FOUND}>:FEngine.cpp>
