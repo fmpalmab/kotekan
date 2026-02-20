@@ -216,12 +216,12 @@ baseband_pool:
 
 # Baseband capture and dump system
 baseband_output_buffers:
-  num_frames: 3 * 11 * 32 # baseband_buffer_depth
   frame_size: samples_per_data_set * num_elements * num_freq_host_buf * num_data_sets / 32
   metadata_pool: baseband_pool
 {%- for id in range(16) %}
   baseband_output_buffer_{{ id }}:
     kotekan_buffer: standard
+    num_frames: 3 * 11 * 32 # baseband_buffer_depth
 {%- endfor %}
   baseband_output_buffer_merged:
     kotekan_buffer: standard
@@ -254,17 +254,17 @@ write_baseband:
     kotekan_stage: BasebandWriter
     in_buf: baseband_output_buffer_merged
 
-# Transmit baseband data to the baseband receiver
-baseband_send:
-  server_ip: 10.5.60.2
-  reconnect_time: 60
-  send_timeout: 600 # 10 minutes
-  log_level: warn
-  # Keep data in memory even if the receiver node is down
-  # Baseband readout handles back pressure management
-  drop_frames: false
-  use_config_tracker: false # not used by legacy CHIME kotekan code
-  baseband_send_0:
-    kotekan_stage: bufferSend
-    server_port: 11027
-    buf: baseband_output_buffer_merged
+## Transmit baseband data to the baseband receiver
+#baseband_send:
+#  server_ip: 10.5.60.2
+#  reconnect_time: 60
+#  send_timeout: 600 # 10 minutes
+#  log_level: warn
+#  # Keep data in memory even if the receiver node is down
+#  # Baseband readout handles back pressure management
+#  drop_frames: false
+#  use_config_tracker: false # not used by legacy CHIME kotekan code
+#  baseband_send_0:
+#    kotekan_stage: bufferSend
+#    server_port: 11027
+#    buf: baseband_output_buffer_merged
