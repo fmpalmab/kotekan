@@ -28,7 +28,7 @@ num_freq_host_buf: 1
 num_freq_gpu_buf: 16
 num_frequencies: num_freq_gpu_buf # from Erik's FEngine test
 num_ev: 4                         # from CHIME science run
-num_ev_to_calculate: 4       # from n2 test case
+num_ev_to_calculate: 4            # from n2 test case
 samples_per_frame: 16384
 num_times: samples_per_frame      # from Erik's FEngine test
 host_buffer_depth: 3*272 # == baseband_buffer_depth
@@ -49,8 +49,11 @@ sizeof_short: 2
 adc_frequency: 1.6e+9           # [Hz]
 
 # Other parts of Kotekan want this
-num_samples_per_frame: samples_per_frame
-frame_arrival_period: num_samples_per_frame / adc_frequency
+# this is the number of samples in the FPGA network packet, not how many are in
+# a frame produced by dpdk
+fpga_num_samples_per_frame: 4096
+# this is 2.56us
+frame_arrival_period: fpga_num_samples_per_frame / adc_frequency
 
 use_hugepages: true
 
@@ -637,8 +640,9 @@ vis_accumulate:
     out_buf: vis_10s_buffer
     packet_loss_is_scalar: True
     num_threads: 3
-    # TODO: this should use a ceil or similar, NB: frame_arrival_period is really frame_arrive_rate
-    num_n2k_samples_to_accumulate: (10 * frame_arrival_period * n2k_num_subintegrations)/2 * 2
+    # round_to_even(10 / ( n2k_samples_per_data_set * frame_arrival_period ) * n2k_num_subintegrations)
+    # round_to_even(10s / ( 16384 * 2.56us ) * 1) = 238
+    num_n2k_samples_to_accumulate: 238
     # these recap values from cudaCorrelator
     num_freq_per_n2k_frame: num_frequencies
     samples_per_data_set: n2k_samples_per_data_set
