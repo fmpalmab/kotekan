@@ -108,6 +108,7 @@ void chordMetadata::set_from_frame_desc(
     const std::shared_ptr<const kotekan::GenericNDArray>& frame_desc) {
     this->type = frame_desc->get_value_datatype();
     this->dims = frame_desc->get_rank();
+    snprintf(this->name, sizeof this->name, "%s", frame_desc->get_quantity_name().get_c_string());
     for (int d = this->dims - 1; d >= 0; --d) {
         strncpy(this->dim_name[d], frame_desc->get_dimname(d).get_c_string(),
                 sizeof this->dim_name[d]);
