@@ -6,7 +6,6 @@
 #include "chordMetadata.hpp"   // for chordMetadata, get_chord_metadata, CHORD_META_MAX_FREQ
 #include "kotekanLogging.hpp"  // for INFO, DEBUG, ERROR
 
-#include <algorithm> // for std::copy
 #include <assert.h>  // for assert
 #include <stdint.h>  // for int8_t, uint32_t, uint8_t, int16_t, int32_t, uint64_t
 #include <string>    // for std::string
@@ -26,7 +25,8 @@ parseReorderDefault::parseReorderDefault(Config& config, const std::string& uniq
     Stage(config, unique_name, buffer_container,
           std::bind(&parseReorderDefault::main_thread, this)),
     _out_buf(get_buffer("out_buf")), _name(config.get<std::string>(unique_name, "name")),
-    _input_reorder(std::get<0>(parse_reorder_default(config, unique_name))) {
+    _input_reorder(std::get<0>(parse_reorder_default(config, unique_name))),
+    _invert_mapping(config.get_default<bool>(unique_name, "invert_mapping", true)) {
 
     _out_buf->register_producer(unique_name);
 
@@ -53,7 +53,19 @@ void parseReorderDefault::main_thread() {
         if (frame == nullptr)
             break;
 
-        std::copy(_input_reorder.begin(), _input_reorder.end(), frame);
+        for (size_t i = 0; i < _input_reorder.size(); ++i) {
+            if (_invert_mapping) {
+                // the (ptrdiff_t) cast is just there to pacify a warning about
+                // comparing unsigned >= 0 being always true. The assert is to
+                // future proof this in case anyone ever changes the type of
+                // _input_reorder to be signed.
+                assert((ptrdiff_t)_input_reorder.at(i) >= 0
+                       && _input_reorder.at(i) < _input_reorder.size());
+                frame[_input_reorder.at(i)] = static_cast<int32_t>(i);
+            } else {
+                frame[i] = _input_reorder.at(i);
+            }
+        }
 
         _out_buf->allocate_new_metadata_object(frame_id);
         std::shared_ptr<chordMetadata> chordmeta = get_chord_metadata(_out_buf, frame_id);

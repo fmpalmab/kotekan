@@ -20,6 +20,9 @@
  *
  * @conf  name                  String. Name of the quantity being set.
  * @conf  input_reorder         Table. The input reorder table to parse.
+ * @conf  invert_mapping        Bool. Default: true. Invert the input reorder
+ *                              table, that is store the target indices instead
+ *                              of the source indices consecutively.
  *
  * @author Roland Haas
  */
@@ -34,6 +37,7 @@ private:
     Buffer* const _out_buf;
     const std::string _name;
     const std::vector<uint32_t> _input_reorder;
+    const bool _invert_mapping;
 };
 
 #endif
