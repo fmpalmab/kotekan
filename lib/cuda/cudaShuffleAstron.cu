@@ -1,6 +1,6 @@
 #include "cudaShuffleAstron.cuh"
 #include "cudaUtils.hpp"
-#include "math.h"
+#include <math.h>
 #include "mma.h"
 
 using kotekan::bufferContainer;

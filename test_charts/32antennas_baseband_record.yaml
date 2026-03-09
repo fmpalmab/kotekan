@@ -1,6 +1,6 @@
 type: config
 log_level: INFO
-buffer_depth: 500 #max 1500 (RAM limit)
+buffer_depth: 100 #max 1500 (RAM limit)
 cpu_affinity: [0,1]
 
 num_elements: 32
@@ -43,7 +43,7 @@ dpdk:
       out_buffer: network_capture_buf
       alignment: 4000
       mask_buf: mask_buffer_zeros
-      capture_n_frames: 200 # 1 frame = 50ms
+      capture_n_frames: 20 # 1 frame = 50ms
 
 zero_samples:
  kotekan_stage: zeroSamples

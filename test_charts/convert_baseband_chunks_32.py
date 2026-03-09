@@ -15,8 +15,8 @@ NUM_ELEMENTS = 32
 # Kotekan Raw Parameters
 METADATA_SIZE = 96 # Baseband frame metadata size in bytes
 SPECTRUM_SIZE = 21504
-SPECTRA_PER_FRAME = 15000
-FRAME_SIZE = METADATA_SIZE + SPECTRA_PER_FRAME * SPECTRUM_SIZE
+#SPECTRA_PER_FRAME = 14976
+#FRAME_SIZE = METADATA_SIZE + SPECTRA_PER_FRAME * SPECTRUM_SIZE
 
 
 # File output parameters: objective is 500 MB files
@@ -196,12 +196,19 @@ def create_vds(outdir, vds_name="baseband_virtual.h5"):
 
 def main():
 
-    global buffers, time_counters, file_indices, first_sample_index
+    global buffers, time_counters, file_indices, first_sample_index,SPECTRA_PER_FRAME, FRAME_SIZE
+
     ap = argparse.ArgumentParser()
     ap.add_argument("raw_file", help="Input Kotekan raw baseband file")
     ap.add_argument("--outdir-base", help="Output base directory", default="/hdd")
+    ap.add_argument("--spectra-per-frame", type=int, default=15000)
     args = ap.parse_args()
-
+    
+    
+    SPECTRA_PER_FRAME = args.spectra_per_frame
+    FRAME_SIZE = METADATA_SIZE + SPECTRA_PER_FRAME * SPECTRUM_SIZE
+    
+    
     stream_raw_file(args.raw_file, process_spectrum, args.outdir_base)
 
     for f0 in buffers:

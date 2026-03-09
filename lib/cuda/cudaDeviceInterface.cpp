@@ -175,23 +175,36 @@ void cudaDeviceInterface::build(const std::string& kernel_filename,
 
     // Convert compiler options to a c-style array.
     std::vector<const char*> cstrings;
-    cstrings.reserve(opts.size());
+    cstrings.reserve(opts.size() + 4);
 
     for (auto& s : opts)
         cstrings.push_back(s.c_str());
 
+    // AÑADIR ESTO (paths para que funcione cuda::std via CCCL)
+    cstrings.push_back("--include-path=/usr/local/cuda/include");
+    cstrings.push_back("--include-path=/usr/local/cuda/include/cccl");
+
+    // (opcional pero recomendable)
+    cstrings.push_back("--std=c++17");
+
     // Compile the kernel
-    res = nvrtcCompileProgram(prog, cstrings.size(), cstrings.data());
+    res = nvrtcCompileProgram(prog, cstrings.size(), cstrings.data());    // TODO Abstract error checking
+
     if (res != NVRTC_SUCCESS) {
-        const char* error_str = nvrtcGetErrorString(res);
-        FATAL_ERROR("ERROR IN nvrtcCompileProgram: {}", error_str);
-        // Obtain compilation log from the program.
-        size_t logSize;
+
+        // 1) Log de NVRTC (lo más importante)
+        size_t logSize = 0;
         nvrtcGetProgramLogSize(prog, &logSize);
-        char* log = new char[logSize];
-        nvrtcGetProgramLog(prog, log);
-        INFO("COMPILE LOG: {}", log);
+
+        std::string log;
+        log.resize(logSize > 1 ? logSize : 1);  // evita size 0
+        nvrtcGetProgramLog(prog, log.data());
+
+        // 2) Mensaje de error + log
+        const char* error_str = nvrtcGetErrorString(res);
+        FATAL_ERROR("ERROR IN nvrtcCompileProgram: {}\nNVRTC LOG:\n{}", error_str, log);
     }
+    
 
     // Obtain PTX from the program.
     size_t ptxSize;

@@ -11,12 +11,13 @@ block_size: 2
 num_blocks: 136 #(num_elements / block_size) * (num_elements / block_size + 1) / 2 #This is a kernel tuning parameter for a global work space dimension that sets data sizes fo  GPU work items.
 packets_per_spectrum: 4
 samples_per_data_set: 14976 # 49.920ms (one frame), 15000 = 50 ms of data  13/02/2026: SEEMS WE HAVE TO CHANGE IN ORDER TO FOLLOW THE KERNEL (MUST BE DIVISIBLE BY 32)
-bytes_per_dataset: n_channels_per_packet * packets_per_spectrum * samples_per_data_set # 50 ms of data
-
+bytes_per_dataset: n_channels_per_packet * packets_per_spectrum * samples_per_data_set
+sizeof_int: 4
+data_format: "cuda_wmma"
 
 main_pool:
   kotekan_metadata_pool: BasebandMetadata
-  num_metadata_objects: buffer_depth
+  num_metadata_objects: buffer_depth*15
 
 # Buffer to hold captured network packets
 network_capture_buf:
@@ -38,7 +39,7 @@ mask_buffer_zeros:
 host_correlation_buffer:
     kotekan_buffer: standard
     num_frames: buffer_depth
-    frame_size: bytes_per_dataset * num_elements # ONLY TEST MUST BE CHECKED
+    frame_size: num_local_freq * num_blocks * (block_size*block_size) * 2 * num_data_sets * sizeof_int 
     metadata_pool: main_pool
 
 
@@ -56,7 +57,7 @@ dpdk:
       out_buffer: network_capture_buf
       alignment: 4000
       mask_buf: mask_buffer_zeros
-      #capture_n_frames: 10 # 1 frame = 50ms
+      capture_n_frames: 20 # 1 frame =  49.920ms
 
 zero_samples:
  kotekan_stage: zeroSamples
@@ -94,20 +95,24 @@ gpu:
         host_correlation: host_correlation_buffer
       
 
-
-
 # Monitoring stages 
-inspect_frame:
+# inspect_frame:
+#   kotekan_stage: restInspectFrame
+#   in_buf: network_capture_buf
+
+inspect_frame2:
   kotekan_stage: restInspectFrame
+  in_buf: host_correlation_buffer
+
+# hexDump: # print hex dump of captured packets for debugging
+#   kotekan_stage: hexDump
+#   in_buf: host_correlation_buffer
+
+
+raw_file_write:
+  kotekan_stage: BasebandWriter
+  samples_per_data_set: 10063872 # bytes_per_dataset 
+  num_elements: 32 
   in_buf: network_capture_buf
-
-inspect_frame:
-  kotekan_stage: restInspectFrame
-  in_buf: network_capture_buf
-
-hexDump: # print hex dump of captured packets for debugging
-  kotekan_stage: hexDump
-  in_buf: host_correlation
-
-
-  
+  root_path: /data/32_test # Config (flag)
+  dump_timeout: 1
