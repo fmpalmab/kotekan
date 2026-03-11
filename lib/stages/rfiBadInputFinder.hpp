@@ -39,7 +39,7 @@
  * @buffer rfi_in        The kotekan buffer containing spectral kurtosis estimates to be read by the
  * stage.
  * 	@buffer_format   Array of @c floats
- * 	@buffer_metadata chimeMetadata
+ * 	@buffer_metadata chordMetadata
  *
  * @par REST Endpoints
  * @endpoint    /rfi_broadcast ``POST`` Updates frames per broadcast packet
@@ -79,7 +79,7 @@ private:
     // Functon to compute standard deviation of an array, not including wild outliers
     float deviation(float array[], uint32_t num, float outliercut);
     /// Kotekan buffer containing kurtosis estimates
-    struct Buffer* rfi_buf;
+    Buffer* rfi_buf;
     // General Config Parameters
     /// Number of elements (2048 for CHIME or 256 for Pathfinder)
     uint32_t _num_elements;

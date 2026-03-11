@@ -1,33 +1,29 @@
 #include "rfiBadInputFinder.hpp"
 
 #include "Config.hpp"       // for Config
+#include "N2Util.hpp"       // for frameID
 #include "StageFactory.hpp" // for REGISTER_KOTEKAN_STAGE, StageMakerTemplate
 #include "Telescope.hpp"
-#include "buffer.h"            // for mark_frame_empty, register_consumer, wait_for_full_frame
+#include "buffer.hpp"          // for Buffer
 #include "bufferContainer.hpp" // for bufferContainer
-#include "chimeMetadata.hpp"   // for get_fpga_seq_num, get_stream_id
-#include "kotekanLogging.hpp"  // for ERROR, INFO, DEBUG
-#include "restServer.hpp"      // for restServer, connectionInstance, HTTP_RESPONSE, HTTP_RESPO...
-#include "rfi_functions.h"     // for RFIHeader
+#include "chordMetadata.hpp"
+#include "kotekanLogging.hpp" // for ERROR, INFO, DEBUG
+#include "restServer.hpp"     // for restServer, connectionInstance, HTTP_RESPONSE, HTTP_RESPO...
+#include "rfi_functions.h"    // for RFIHeader
 
 #ifdef DEBUGGING
 #include "util.h" // for e_time
 #endif
 
 #include <arpa/inet.h>  // for inet_aton
-#include <atomic>       // for atomic_bool
 #include <cmath>        // for pow, sqrt
-#include <exception>    // for exception
 #include <functional>   // for _Bind_helper<>::type, _Placeholder, bind, _1, _2, function
 #include <mutex>        // for mutex
 #include <netinet/in.h> // for sockaddr_in, IPPROTO_UDP, htons
-#include <regex>        // for match_results<>::_Base_type
-#include <stdexcept>    // for runtime_error
 #include <stdlib.h>     // for free, malloc
 #include <string.h>     // for memcpy, memset
 #include <string>       // for string, allocator, operator+
 #include <sys/socket.h> // for sendto, socket, AF_INET, SOCK_DGRAM
-#include <vector>       // for vector
 
 
 using kotekan::bufferContainer;
@@ -43,10 +39,11 @@ REGISTER_KOTEKAN_STAGE(rfiBadInputFinder);
 rfiBadInputFinder::rfiBadInputFinder(Config& config, const std::string& unique_name,
                                      bufferContainer& buffer_container) :
     Stage(config, unique_name, buffer_container, std::bind(&rfiBadInputFinder::main_thread, this)) {
+
     // Get buffer from framework
     rfi_buf = get_buffer("rfi_in");
     // Register stage as consumer
-    register_consumer(rfi_buf, unique_name.c_str());
+    rfi_buf->register_consumer(unique_name);
 
     // Intialize internal config
     _num_local_freq = config.get<uint32_t>(unique_name, "num_local_freq");
@@ -79,7 +76,7 @@ rfiBadInputFinder::~rfiBadInputFinder() {
 
 void rfiBadInputFinder::rest_callback(connectionInstance& conn, nlohmann::json& json_request) {
     // Notify that request was received
-    INFO("RFI Callback Received... Changing Parameters")
+    INFO("RFI Callback Received... Changing Parameters");
     // Lock mutex
     rest_callback_mutex.lock();
     // Adjust parameters
@@ -128,9 +125,9 @@ float rfiBadInputFinder::deviation(float array[], uint32_t num, float outliercut
 void rfiBadInputFinder::main_thread() {
 
     // Intialize frame variables
-    uint32_t frame_id = 0;
-    uint8_t* frame = nullptr;
+    N2::frameID frame_id(rfi_buf);
     uint32_t frame_counter = 0;
+
     // Initialize arrays
     float rfi_data[_num_local_freq * _num_elements];
     stream_t StreamIDs[total_links];
@@ -176,7 +173,7 @@ void rfiBadInputFinder::main_thread() {
     // Main while loop
     while (!stop_thread) {
         // Get a frame
-        frame = wait_for_full_frame(rfi_buf, unique_name.c_str(), frame_id);
+        uint8_t* frame = (uint8_t*)rfi_buf->wait_for_full_frame(unique_name, frame_id);
         if (frame == nullptr)
             break;
 #ifdef DEBUGGING
@@ -185,12 +182,14 @@ void rfiBadInputFinder::main_thread() {
 #endif
         // Copy frame data to array
         memcpy(rfi_data, frame, rfi_buf->frame_size);
+        // Get the framemetadata
+        std::shared_ptr<chordMetadata> meta = get_chord_metadata(rfi_buf, frame_id);
         // Add frame metadata to header
         if (frame_counter == 0) {
             // TODO: stream_id - this uses internal knowledge of the structure
-            StreamIDs[0] = get_stream_id(rfi_buf, frame_id);
+            StreamIDs[0] = meta->get_stream_id();
             rfi_header.streamID = (uint16_t)(StreamIDs[0].id);
-            rfi_header.seq_num = get_fpga_seq_num(rfi_buf, frame_id);
+            rfi_header.seq_num = meta->get_fpga_seq_num();
         }
         // Compute statistics
         float med = median(rfi_data, _num_local_freq * _num_elements);
@@ -202,10 +201,11 @@ void rfiBadInputFinder::main_thread() {
             }
         }
         // Move to next frame
-        mark_frame_empty(rfi_buf, unique_name.c_str(), frame_id);
-        frame_id = (frame_id + 1) % rfi_buf->num_frames;
+        rfi_buf->mark_frame_empty(unique_name, frame_id);
+        frame_id++;
         // Adjust frame counter
         frame_counter++;
+
         // After 10 frames
         rest_callback_mutex.lock();
         if (frame_counter == _frames_per_packet) {
@@ -231,8 +231,10 @@ void rfiBadInputFinder::main_thread() {
             // Check if packet sent properly
             if (bytes_sent != packet_length)
                 ERROR("SOMETHING WENT WRONG IN UDP TRANSMIT");
+
             DEBUG("Frame ID {:d} Succesfully Sent. {:d} Bytes in {:f}ms", frame_id, bytes_sent,
                   (e_time() - start_time) * 1000);
+
             // Reset Counter
             memset(faulty_counter, (uint8_t)0, sizeof(faulty_counter));
         }
