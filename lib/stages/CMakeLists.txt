@@ -87,6 +87,7 @@ add_library(
     lostSamplesToN2Counts.cpp
     bufferBadInputs.cpp
     RfiFrameDrop.cpp
+    rfiBadInputFinder.cpp
     VisSharedMemWriter.cpp
     DataQuality.cpp
     BeamExtract.cpp
