@@ -22,7 +22,8 @@
  * @class bufferBadInputs
  * @brief Buffers updates to the bad input list.
  *
- * This engine reorders, inverts and generates a mask of bad inputs then stores the mask in a buffer
+ * Copies a list of bad inputs into a mask buffer, which is 0 if an element is
+ * bad and 1 if it is good.
  *
  * @par Buffers
  * @buffer out_buf Kotekan buffer of bad inputs.
@@ -58,16 +59,11 @@ private:
     /// List of current bad inputs in cylinder order
     std::vector<int> bad_inputs_cylinder;
 
-    /// List of current bad inputs in correlator order.
-    std::vector<int> bad_inputs_correlator;
-
     /// The size of the bad input mask.
-    uint32_t input_mask_len;
+    int input_mask_len;
 
-    /// The mapping from correlator to cylinder element indexing.
-    std::vector<uint32_t> input_remap;
-
-    uint32_t out_buffer_ID = 0;
+    // Need to use the frame_id outside of the main thread
+    uint32_t frame_id;
 };
 
 #endif
