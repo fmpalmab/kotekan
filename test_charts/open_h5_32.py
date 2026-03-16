@@ -39,11 +39,6 @@ def main():
         print("File attributes:")
         for k in f.attrs.keys():
             print(f"  {k}: {f.attrs[k]}")
-
-            start_time_us = f.attrs.get("start_time_utc_us", 0)
-            delta_time_s = f.attrs.get("delta_time_s", 0)
-            freq_0_MHz = f.attrs.get("freq_0_MHz", 0)
-            delta_freq_MHz = f.attrs.get("delta_freq_MHz", 0)
     
 
         
@@ -68,12 +63,12 @@ def main():
 
     #Plot spectrum ant x on time
 
-    # time_axis = np.arange(x.shape[1]) * delta_time_s + start_time_us * 1e-6
-    # freq_axis = np.arange(x.shape[0]) * delta_freq_MHz + freq_0_MHz
+    #time_axis = np.arange(x.shape[1]) * delta_time_s + start_time_us * 1e-6
+    #freq_axis = np.arange(x.shape[0]) * delta_freq_MHz + freq_0_MHz
 
-    # plt.figure(figsize=(10,5))
-    # plt.imshow(np.abs(x), aspect="auto", cmap="viridis", extent=[time_axis[0], time_axis[-1], freq_axis[0], freq_axis[-1]], origin="lower")
-    # plt.show()
+    # # plt.figure(figsize=(10,5))
+    # # plt.imshow(np.abs(x), aspect="auto", cmap="viridis", extent=[time_axis[0], time_axis[-1], freq_axis[0], freq_axis[-1]], origin="lower")
+    # # plt.show()
 
     mean_x = np.mean(np.abs(x)**2, axis=1)
     mean_y = np.mean(np.abs(y)**2, axis=1)
@@ -109,54 +104,63 @@ def main():
     # print("Valid samples:", np.sum(valid_mask))
 
 
-    # chains = unpack_4bit_complex(packed)
+    chains = unpack_4bit_complex(packed)
     
 
-    # n_ant = chains.shape[0]
-    # n_freq = chains.shape[1]
+    n_ant = chains.shape[0]
+    n_freq = chains.shape[1]
     
-    # print(f"Chains decoded shape: {chains.shape} (Antennas, Freqs, Time)")
+    print(f"Chains decoded shape: {chains.shape} (Antennas, Freqs, Time)")
 
-    # fig, axes = plt.subplots(n_ant, n_ant, figsize=(20, 20))
-    # frequencies = np.linspace(300, 501.6, n_freq, endpoint=False)  # Frequency axis
-
-
+    fig, axes = plt.subplots(n_ant, n_ant, figsize=(20, 20))
+    frequencies = np.linspace(300, 501.6, n_freq, endpoint=False)  # Frequency axis
 
 
-    # print("Calculating correlations and plotting...")
-
-    # for i in range(n_ant):
-    #     for j in range(n_ant):
-    #         # Calculate correlation: Average( Antenna_i * conj(Antenna_j) ) over time axis
-    #         # chains[i] shape is (freq, time)
-    #         # Result shape is (freq,)
-    #         corr_spectrum = np.mean(chains[i] * np.conj(chains[j]), axis=1)
-    #         phase = np.angle(corr_spectrum)
 
 
-    #         ax = axes[i, j]
-    #         ax.scatter(frequencies, phase, s=1)
-    #         ax.set_ylim(-np.pi, np.pi)  
+    print("Calculating correlations and plotting...")
 
-    #         # Formatting axes to reduce clutter
-    #         if i == n_ant - 1:
-    #             # Bottom row labels
-    #             if j == 0: ax.set_xlabel("Freq [MHz]", fontsize=7)
-    #         else:
-    #             ax.set_xticks([])
+    for i in range(n_ant):
+        #valid_mask_1 = np.any(chains[i] != 0, axis=0)
 
-    #         if j == 0:
-    #             # Left column labels
-    #             ax.set_ylabel(f"Ant {i}", fontsize=7)
-    #         else:
-    #             ax.set_yticks([])
+        for j in range(n_ant):
+            # Valide Samples
             
-    #         # Top row titles
-    #         if i == 0:
-    #             ax.set_title(f"Ant {j}", fontsize=7)
+            #valid_mask_2 = np.any(chains[j] != 0, axis=0)
 
-    # plt.tight_layout()
-    # plt.show()
+            #valid_mask = valid_mask_1 & valid_mask_2
+            #print(f"Antenna pair ({i}, {j}): Valid samples = {np.sum(valid_mask)} / {chains.shape[2]}")
+                                  
+            # Calculate correlation: Average( Antenna_i * conj(Antenna_j) ) over time axis
+            # chains[i] shape is (freq, time)
+            # Result shape is (freq,)
+            corr_spectrum = np.mean(chains[i] * np.conj(chains[j]), axis=1)
+            phase = np.angle(corr_spectrum)
+
+
+            ax = axes[i, j]
+            ax.scatter(frequencies, phase, s=1)
+            ax.set_ylim(-np.pi, np.pi)  
+
+            #Formatting axes to reduce clutter
+            if i == n_ant - 1:
+                # Bottom row labels
+                if j == 0: ax.set_xlabel("Freq [MHz]", fontsize=7)
+            else:
+                ax.set_xticks([])
+
+            if j == 0:
+                # Left column labels
+                ax.set_ylabel(f"Ant {i}", fontsize=7)
+            else:
+                ax.set_yticks([])
+            
+            # Top row titles
+            if i == 0:
+                ax.set_title(f"Ant {j}", fontsize=7)
+
+    plt.tight_layout()
+    plt.show()
 
 if __name__ == "__main__":
     main()

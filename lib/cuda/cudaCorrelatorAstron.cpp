@@ -52,7 +52,7 @@ cudaCorrelatorAstron::cudaCorrelatorAstron(Config& config, const std::string& un
             fmt::format("-DNR_CHANNELS={:d}", _num_local_freq),
             fmt::format("-DNR_SAMPLES_PER_CHANNEL={:d}", _samples_per_data_set),
             fmt::format("-DNR_RECEIVERS_PER_BLOCK={:d}", _elements_per_thread_block),
-            "-DNR_POLARIZATIONS=2",
+            "-DNR_POLARIZATIONS=2", // 10/03/2026 On CHARTS now we are using 1 pol, but the kernel expect 2, so this is set to 2 for now and its working fine
             "-I/usr/local/cuda/include"};
         device.build(kernel_file_name, {"correlate"}, opts);
     }

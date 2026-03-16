@@ -95,7 +95,7 @@ protected:
         std::string mask_name;
         uint64_t specs_per_frame = 0;
         std::vector<uint8_t> packets_seen;
-        uint64_t valid_specs = 0;
+        uint64_t valid_specs_total = 0;
 
 
         // Capture control
@@ -243,8 +243,7 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
     cur_seq = extract_seq_le64(pkt + ETH_IP_UDP_HDR);
     subband = extract_subband_le8(pkt + ETH_IP_UDP_HDR + 8);
 
-    DEBUG("rfsocHandler: Packet seq: {:d}, subband: {:d}", cur_seq, subband);
-
+    //DEBUG("rfsocHandler: Packet seq: {:d}, subband: {:d}", cur_seq, subband);
 
     cur_spec = (cur_seq >> 2);  //  one spec are 4 packets
 
@@ -259,9 +258,9 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
 
 
     if (unlikely(!got_first_packet)) {
-        if (!align_first_packet(cur_seq)) {
-            return 0;   // descartar
-        }
+        if (!align_first_packet(cur_seq)) return 0;
+        // first packet, just copy it and move on (after alignment)
+        return copy_packet(mbuf) ? (last_seq = cur_seq, 0) : -1;
     }
     const int64_t seq_diff = (int64_t)cur_seq - (int64_t)last_seq;
     if (unlikely(seq_diff <= 0)) {
@@ -342,6 +341,8 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
                 rx_lost_samples_total +=1;
             }
         }
+
+        DEBUG("advance_frame: closing frame_id {} start_spec {} valid_specs_total {}", out_frame_id, frame_start_spec, valid_specs_total);
 
         //out_buf->allocate_new_metadata_object(out_frame_id);
         out_buf->mark_frame_full(unique_name, out_frame_id);
@@ -427,7 +428,7 @@ inline bool rfsocHandler::copy_packet(struct rte_mbuf* mbuf) {
     seen |= bit;
     if (seen == 0x0F) { // 4 subbands recibidas
         mask_frame[spec_loc] = 0;
-        valid_specs++;
+        valid_specs_total++;
         rx_samples_total += 1;
 
     }

@@ -200,8 +200,8 @@ def main():
 
     ap = argparse.ArgumentParser()
     ap.add_argument("raw_file", help="Input Kotekan raw baseband file")
-    ap.add_argument("--outdir-base", help="Output base directory", default="/hdd")
-    ap.add_argument("--spectra-per-frame", type=int, default=15000)
+    ap.add_argument("--outdir-base", "-o", help="Output base directory", default="/hdd")
+    ap.add_argument("--spectra-per-frame", "-s", type=int, default=15000)
     args = ap.parse_args()
     
     
