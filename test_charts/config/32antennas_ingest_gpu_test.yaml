@@ -1,6 +1,6 @@
 type: config
 log_level: INFO
-buffer_depth: 30 #max 1500 (RAM limit) (its important that if we are using GPU, this depth also affect to the VRAM)
+buffer_depth: 20 #max 1500 (RAM limit) (its important that if we are using GPU, this depth also affect to the VRAM)
 cpu_affinity: [0,1]
 
 num_elements: 32 #antennas
@@ -10,13 +10,14 @@ num_data_sets: 1 # Number of independent integrations within a single dataset
 block_size: 2
 num_blocks: 136 #(num_elements / block_size) * (num_elements / block_size + 1) / 2 #This is a kernel tuning parameter for a global work space dimension that sets data sizes fo  GPU work items.
 packets_per_spectrum: 4
-samples_per_data_set: 14976 # 49.920ms (one frame) 13/02/2026: SEEMS WE HAVE TO CHANGE IN ORDER TO FOLLOW THE KERNEL (MUST BE DIVISIBLE BY 32)
+samples_per_data_set: 15360 # 51.2ms (one frame)
+sub_integration_ntime: 15360
 bytes_per_dataset: n_channels_per_packet * packets_per_spectrum * samples_per_data_set
 sizeof_int: 4
 data_format: "cuda_wmma"
 
 main_pool:
-  kotekan_metadata_pool: BasebandMetadata
+  kotekan_metadata_pool: chordMetadata
   num_metadata_objects: buffer_depth*15
 
 # Buffers
@@ -34,16 +35,18 @@ host_correlation_buffer:
     frame_size: num_local_freq * num_blocks * (block_size*block_size) * 2 * num_data_sets * sizeof_int 
     metadata_pool: main_pool
 
-simulated_correlation_buffer:
-    kotekan_buffer: standard
-    num_frames: buffer_depth
-    frame_size: num_local_freq * num_blocks * (block_size*block_size) * 2 * num_data_sets * sizeof_int 
-    metadata_pool: main_pool
+# simulated_correlation_buffer:
+#     kotekan_buffer: standard
+#     num_frames: buffer_depth
+#     frame_size: num_local_freq * num_blocks * (block_size*block_size) * 2 * num_data_sets * sizeof_int 
+#     metadata_pool: main_pool
 
 # Gen data test
 gen_data:
   type: random
-  value: 1532
+  seed: 1234
+  num_frames: 8
+  end_interrupt: false
   kotekan_stage: testDataGen
   out_buf: network_capture_buf
 
@@ -75,28 +78,20 @@ gpu:
       out_buffers:
         host_correlation: host_correlation_buffer
 
-cpu:
-    kotekan_stage: gpuSimulate
-    log_level: info
-    network_in_buf: host_voltage_buffer
-    corr_out_buf: simulated_correlation_buffer
+# cpu:
+#     kotekan_stage: gpuSimulate
+#     network_in_buf: network_capture_buf
+#     corr_out_buf: simulated_correlation_buffer
 
-check_data:
-    kotekan_stage: testDataCheckInt
-    first_buf: host_correlation_buffer
-    second_buf: simulated_correlation_buffer
-    num_frames_to_test: buffer_depth
-
+# check_data:
+#     kotekan_stage: testDataCheckInt
+#     first_buf: host_correlation_buffer
+#     second_buf: simulated_correlation_buffer
+#     num_frames_to_test: buffer_depth
 
 
-# Monitoring stages 
-# inspect_frame:
-#   kotekan_stage: restInspectFrame
-#   in_buf: network_capture_buf
 
-# inspect_frame2:
-#   kotekan_stage: restInspectFrame
-#   in_buf: host_correlation_buffer
+
 
 # hexDump: # print hex dump of captured packets for debugging
 #   kotekan_stage: hexDump
@@ -105,7 +100,7 @@ check_data:
 
 # raw_file_write:
 #   kotekan_stage: BasebandWriter
-#   samples_per_data_set: 10063872 # bytes_per_dataset 
+#   samples_per_data_set: bytes_per_dataset # bytes_per_dataset 
 #   num_elements: 32 
 #   in_buf: network_capture_buf
 #   root_path: /data/32_test # Config (flag)

@@ -69,6 +69,7 @@ protected:
         uint8_t subband = 0;
         uint32_t timestamp_sec = 0;
         uint32_t timestamp_micro = 0;
+        uint64_t time0_fpga = 0;
         
         uint64_t frame_start_seq = 0;
         uint32_t header_offset = 0;
@@ -242,7 +243,7 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
     const uint8_t* pkt = rte_pktmbuf_mtod(mbuf, const uint8_t*);
     cur_seq = extract_seq_le64(pkt + ETH_IP_UDP_HDR);
     subband = extract_subband_le8(pkt + ETH_IP_UDP_HDR + 8);
-
+    time0_fpga = ((uint64_t)timestamp_sec) * 1000000ULL + ((uint64_t)timestamp_micro);
     //DEBUG("rfsocHandler: Packet seq: {:d}, subband: {:d}", cur_seq, subband);
 
     cur_spec = (cur_seq >> 2);  //  one spec are 4 packets
@@ -292,6 +293,8 @@ inline bool rfsocHandler::align_first_packet(uint64_t seq) {
 
     if ((seq % alignment) <= 1000) {
             INFO("rfsocHandler: Aligned at sequence {:d}", seq);
+            INFO("rfsocHandler: Time0 FPGA timestamp: {:d} microseconds", time0_fpga);
+
             last_seq = seq - seq % alignment; // The alignment must be multiple of the subbands
             got_first_packet = true;
 
@@ -384,7 +387,7 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
     out_metadata->event_id = 0;
     out_metadata->freq_id = 0;
 
-    uint64_t time0_fpga = ((uint64_t)timestamp_sec) * 1000000ULL + ((uint64_t)timestamp_micro);
+    
     out_metadata->time0_fpga = time0_fpga;
     out_metadata->frame_fpga_seq = frame_start_spec; // spec (sample) number
     return true;
