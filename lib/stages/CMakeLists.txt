@@ -201,6 +201,7 @@ if(KOTEKAN_FORCE_LIBATOMIC)
 endif()
 
 if(CUDAToolkit_FOUND)
+    target_sources(kotekan_stages PRIVATE dsaBeamformerStage.cpp)
     target_include_directories(kotekan_stages PUBLIC ${CUDAToolkit_INCLUDE_DIRS})
     message(STATUS "kotekan_stages include dirs: ")
     get_target_property(STAGES_INCLUDES kotekan_stages INCLUDE_DIRECTORIES)
