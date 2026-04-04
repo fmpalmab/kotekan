@@ -205,7 +205,7 @@ int run_beamformer(int argc, char *argv[]){
 	CxInt8_t *fourier_coefficients = new CxInt8_t[fourier_coefficients_cols*fourier_coefficients_rows*N_FREQUENCIES];
 
 	for (int i = 0; i < N_FREQUENCIES; i++){
-		float freq = END_F - (ZERO_PT + gpu*TOT_CHANNELS/(N_GPUS-1) + i)*bw_per_channel;
+		float freq = START_F + i * bw_per_channel;
 		float wavelength = C_SPEED/(1E9*freq);
 		for (int j = 0; j < N_ANTENNAS; j++){
 			for (int k = 0; k < N_BEAMS; k++){

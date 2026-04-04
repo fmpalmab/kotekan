@@ -34,9 +34,9 @@
 
 #define BURNIN 25
 
-#define N_BEAMS 256
-#define N_ANTENNAS 64
-#define N_FREQUENCIES 256
+#define N_BEAMS 32
+#define N_ANTENNAS 32
+#define N_FREQUENCIES 672
 #define HALF_FOV 3.5		//Degrees
 
 #define N_POL 2				//Number of polarizations
@@ -46,14 +46,14 @@
 	/* Number of time samples to average after beamforming */
 	#define N_AVERAGING 1
 #else
-	#define N_AVERAGING 16
+	#define N_AVERAGING 300
 #endif
 
 // Data Indexing, Offsets
 #define N_GPUS 8
-#define TOT_CHANNELS 2048
-#define START_F 1.28
-#define END_F 1.53
+#define TOT_CHANNELS 672
+#define START_F 0.300
+#define END_F 0.5016
 #define ZERO_PT 0
 #define BW_PER_CHANNEL ((END_F - START_F)/TOT_CHANNELS)
 
