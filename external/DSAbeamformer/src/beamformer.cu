@@ -439,7 +439,7 @@ int run_beamformer(int argc, char *argv[]){
 												fourier_coefficients_rows, B_cols, fourier_coefficients_cols,
 												d_inv_max_value,
 												d_fourier_coefficients, CUDA_C_8I, fourier_coefficients_rows, fourier_coefficients_stride,
-												&d_B[N_CX_IN_PER_GEMM*st], CUDA_C_8I, B_rows, B_stride,
+												&d_B[N_CX_IN_PER_GEMM*st], CUDA_C_8I, B_rows * N_FREQUENCIES, B_rows,
 												d_zero,
 												&d_C[N_CX_OUT_PER_GEMM*st], CUDA_C_32F, C_rows, C_stride,
 												N_FREQUENCIES, CUDA_C_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP));
