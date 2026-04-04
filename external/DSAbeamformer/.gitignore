@@ -1,0 +1,26 @@
+#executables
+*.exe
+*.exp
+*.lib
+m2g
+py
+bin
+beam
+
+#python notebook
+Untitled.ipynb
+*checkpoint*ipynb
+*.ipynb_checkpoints*
+
+#other objects
+*.pptx
+*data
+*bit
+*.obj
+*.dll
+bitmap*
+*data.py*
+bin/data.py
+foo.txt
+*.pdb
+*.swp
