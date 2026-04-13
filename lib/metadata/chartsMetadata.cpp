@@ -18,6 +18,7 @@ chartsMetadata::chartsMetadata() :
     }
 }
 
+// Helper function to set the array name and dimension names, ensuring null termination
 void chartsMetadata::check_frame_desc(
     const std::shared_ptr<const kotekan::GenericNDArray>& frame_desc) const {
 
@@ -113,15 +114,20 @@ struct chartsMetadataFormat {
     int32_t coarse_freq[CHARTS_META_MAX_FREQ];
 
     int32_t lost_timesamples;
+
+    timeval first_packet_recv_time;
+
+    uint64_t time0_fpga;
+
 };
 
 size_t chartsMetadata::get_serialized_size() {
     return sizeof(chartsMetadataFormat);
 }
-
+// Helper function to set the array name and dimension names, ensuring null termination
 size_t chartsMetadata::serialize(char* bytes) {
-    auto* fmt = reinterpret_cast<chartsMetadataFormat*>(bytes);
-    memset(fmt, 0, sizeof(*fmt));
+    chartsMetadataFormat* fmt = reinterpret_cast<chartsMetadataFormat*>(bytes);
+    memset(fmt, 0, sizeof(chartsMetadataFormat));
 
     fmt->frame_counter = has_frame_counter() ? get_frame_counter() : -1;
     fmt->fpga_seq_num = has_fpga_seq_num() ? get_fpga_seq_num() : -1;
@@ -150,6 +156,9 @@ size_t chartsMetadata::serialize(char* bytes) {
 
     fmt->lost_timesamples =
         has_lost_timesamples() ? get_lost_timesamples() : -1;
+
+    fmt->time0_fpga = has_time0_fpga() ? get_time0_fpga() : 0;
+
 
     return sizeof(*fmt);
 }
@@ -184,10 +193,20 @@ size_t chartsMetadata::set_from_bytes(const char* bytes, size_t length) {
     if (fmt->lost_timesamples != -1)
         set_lost_timesamples(fmt->lost_timesamples);
 
+    if (fmt->first_packet_recv_time.tv_sec != 0) // sometime in 1970
+        this->set_first_packet_recv_time(fmt->first_packet_recv_time);
+
+    if (fmt->time0_fpga != 0)
+        this->set_time0_fpga(fmt->time0_fpga);
+
     return sizeof(*fmt);
 }
 nlohmann::json chartsMetadata::to_json() {
     nlohmann::json j;
+    
+    j["max_dim"] = CHARTS_META_MAX_DIM;
+    j["max_dimname"] = CHARTS_META_MAX_DIMNAME;
+    j["max_freq"] = CHARTS_META_MAX_FREQ;
 
     j["name"] = get_name();
     j["dims"] = dims;
@@ -201,6 +220,6 @@ nlohmann::json chartsMetadata::to_json() {
     if (has_frame_counter()) j["frame_counter"] = get_frame_counter();
     if (has_coarse_freq()) j["coarse_freq"] = get_coarse_freq();
     if (has_lost_timesamples()) j["lost_timesamples"] = get_lost_timesamples();
-
+    if (has_time0_fpga()) j["time0_fpga"] = get_time0_fpga();
     return j;
 }

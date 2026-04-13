@@ -56,6 +56,9 @@ const std::string
 const std::string
     FREQ_UPCHAN_INDEX("FREQ_UPCHAN_INDEX"); // an array of int of size CHORD_META_MAX_FREQ
 
+const std::string TIME0_FPGA("TIME0_FPGA"); // The FPGA time when send the first sample (s=0 reference for the sequence number in the metadata)
+
+const std::string FRAME_SEQ_FPGA("FRAME_SEQ_FPGA"); // The FPGA sequence number of the first sample in the frame
 
 struct beamCoord {
     float right_ascension[MAX_NUM_BEAMS];

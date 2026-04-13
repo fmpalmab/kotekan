@@ -50,7 +50,7 @@ zero_samples:
  out_buf: network_capture_buf
  lost_samples_buf: mask_buffer_zeros
  zero_value: 0
- sample_size: 21504 
+ sample_size: 21504 # elements * n_channels_per_packet * packets per spectrum 
 
 # Monitoring stages 
 inspect_frame:

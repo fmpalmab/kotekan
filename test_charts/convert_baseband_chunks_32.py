@@ -52,12 +52,14 @@ def stream_raw_file(filename, process_spectrum, outdir_base):
 
             meta = f.read(METADATA_SIZE)
             meta = np.frombuffer(meta, dtype=np.uint8)
-
+            
+            # For frame 0 we excract the time0_fpga and frame_fpga_seq to compute the global start time in microseconds. 
+            # This will be used as a reference for all subsequent spectra. We also create the output directory based on this start time.
             if frame == 0:
-                time0_fpga = int(meta[32:40].view(np.uint64)[0])
-                frame_fpga_seq = int(meta[64:72].view(np.int64)[0])
+                time0_fpga = int(meta[32:40].view(np.uint64)[0]) # Look into BasebandMetadata.cpp 
+                frame_fpga_seq = int(meta[64:72].view(np.int64)[0]) # Look into BasebandMetadata.cpp 
         
-                start_time_us_global = (time0_fpga * 3 + frame_fpga_seq * 10) // 3
+                start_time_us_global = (time0_fpga * 3 + frame_fpga_seq * 10) // 3 
 
                 folder_time = datetime.datetime.fromtimestamp(
                     start_time_us_global / 1_000_000, tz=datetime.timezone.utc
@@ -153,6 +155,14 @@ def create_vds(outdir, vds_name="baseband_virtual.h5"):
     if len(files) == 0:
         raise RuntimeError("No chunked HDF5 files found to build VDS")
 
+    # Read calibration metadata from first file
+    first_file_attrs = {}
+    with h5py.File(files[0], "r") as f:
+        first_file_attrs["freq_start_MHz"] = float(f.attrs["freq_start_MHz"])
+        first_file_attrs["delta_freq_MHz"] = float(f.attrs["delta_freq_MHz"])
+        first_file_attrs["delta_time_us"] = float(f.attrs["delta_time_us"])
+        if "start_time_utc_us" in f.attrs:
+            first_file_attrs["start_time_utc_us"] = int(f.attrs["start_time_utc_us"])
 
     time_max = 0
     for fname in files:
@@ -190,6 +200,15 @@ def create_vds(outdir, vds_name="baseband_virtual.h5"):
         dset = f.create_virtual_dataset("baseband", layout)
         dset.attrs["axes"] = ["antenna", "frequency", "time"]
         dset.attrs["description"] = "Virtual baseband dataset (CHARTS)"
+        
+        # Copy calibration metadata from chunked files
+        dset.attrs["freq_start_MHz"] = first_file_attrs["freq_start_MHz"]
+        dset.attrs["delta_freq_MHz"] = first_file_attrs["delta_freq_MHz"]
+        dset.attrs["delta_time_us"] = first_file_attrs["delta_time_us"]
+        dset.attrs["first_sample_idx"] = 0  # VDS starts at sample 0
+        dset.attrs["time_len"] = time_max
+        if "start_time_utc_us" in first_file_attrs:
+            dset.attrs["start_time_utc_us"] = first_file_attrs["start_time_utc_us"]
 
     print(f"[VDS] Created: {vds_path}")
 

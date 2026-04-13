@@ -19,7 +19,7 @@
 #include <vector>
 
 // Maximum number of frequencies in metadata array
-const int CHARTS_META_MAX_FREQ = 1024;  
+const int CHARTS_META_MAX_FREQ = 672;   // or 1024 
 
 // Maximum number of dimensions for arrays
 const int CHARTS_META_MAX_DIM = 8;
@@ -72,7 +72,6 @@ public:
     char dim_name[CHARTS_META_MAX_DIM][CHARTS_META_MAX_DIMNAME]; // "F", "T", "D", etc
     int64_t stride[CHARTS_META_MAX_DIM]; // The stride counts elements, not bytes
     int64_t offset;   // The offset counts elements, not bytes
-
     void set_name(const std::string& name) {
         // Manually copying in a for loop to avoid possibly buggy GCC warning
         // about array bounds and stringop-truncation.
@@ -189,10 +188,44 @@ public:
         return static_cast<int>(metadata.at(jsonMetadata::COARSE_FREQ).size());
     }
 
+    // First packet receive time -- the system time when the first packet in the frame was captured
+    void set_first_packet_recv_time(const timeval time_v) {
+        std::lock_guard<std::mutex> lock(this->lock);
+        metadata[jsonMetadata::FIRST_PACKET_RECV_TIME] = time_v;
+    }
+
+    bool has_first_packet_recv_time() const {
+        std::lock_guard<std::mutex> lock(this->lock);
+        return metadata.contains(jsonMetadata::FIRST_PACKET_RECV_TIME);
+    }
+
+    timeval get_first_packet_recv_time() const {
+        std::lock_guard<std::mutex> lock(this->lock);
+        return metadata.at(jsonMetadata::FIRST_PACKET_RECV_TIME).template get<timeval>();
+    }
+
+    // Time0 FPGA
+    void set_time0_fpga(const int64_t time0_fpga) {
+        std::lock_guard<std::mutex> lock(this->lock);
+        metadata[jsonMetadata::TIME0_FPGA] = time0_fpga;
+    }
+
+    bool has_time0_fpga() const {
+        std::lock_guard<std::mutex> lock(this->lock);
+        return metadata.contains(jsonMetadata::TIME0_FPGA);
+    }
+
+    int64_t get_time0_fpga() const {
+        std::lock_guard<std::mutex> lock(this->lock);
+        return metadata.at(jsonMetadata::TIME0_FPGA).template get<int64_t>();
+    }
+
+    
+
     void set_lost_timesamples(int32_t x);
     bool has_lost_timesamples() const;
     int32_t get_lost_timesamples() const;
-
+    
 private:
     jsonMetadata::metadata metadata;
 
@@ -202,5 +235,63 @@ private:
     friend void to_json(nlohmann::json& j, const chartsMetadata& m);
     friend void from_json(const nlohmann::json& j, chartsMetadata& m);
 };
+
+
+void to_json(nlohmann::json& j, const chartsMetadata& m);
+void from_json(const nlohmann::json& j, chartsMetadata& m);
+
+inline bool metadata_is_charts(Buffer* buf, int) {
+    return buf && buf->metadata_pool && (buf->metadata_pool->type_name == "chartsMetadata");
+}
+
+inline bool metadata_is_charts(const std::shared_ptr<metadataObject>& mc) {
+    if (!mc)
+        return false;
+    std::shared_ptr<metadataPool> pool = mc->parent_pool.lock();
+    assert(pool);
+    return (pool->type_name == "chartsMetadata");
+}
+
+inline bool metadata_is_charts(const std::shared_ptr<const metadataObject>& mc) {
+    if (!mc)
+        return false;
+    std::shared_ptr<metadataPool> pool = mc->parent_pool.lock();
+    assert(pool);
+    return (pool->type_name == "chartsMetadata");
+}
+
+inline std::shared_ptr<chartsMetadata>
+get_charts_metadata(const std::shared_ptr<metadataObject>& mc) {
+    if (!mc)
+        return std::shared_ptr<chartsMetadata>();
+    if (!metadata_is_charts(mc)) {
+        std::shared_ptr<metadataPool> pool = mc->parent_pool.lock();
+        WARN_NON_OO("Expected metadata to be type \"chartsMetadata\", got \"{:s}\".",
+                    pool->type_name);
+        return std::shared_ptr<chartsMetadata>();
+    }
+    return std::static_pointer_cast<chartsMetadata>(mc);
+}
+
+inline std::shared_ptr<const chartsMetadata>
+get_charts_metadata(const std::shared_ptr<const metadataObject>& mc) {
+    if (!mc)
+        return std::shared_ptr<const chartsMetadata>();
+    if (!metadata_is_charts(mc)) {
+        std::shared_ptr<const metadataPool> pool = mc->parent_pool.lock();
+        WARN_NON_OO("Expected metadata to be type \"chartsMetadata\", got \"{:s}\".",
+                    pool->type_name);
+        return std::shared_ptr<const chartsMetadata>();
+    }
+    return std::static_pointer_cast<const chartsMetadata>(mc);
+}
+
+inline std::shared_ptr<chartsMetadata> get_charts_metadata(Buffer* buf, int frame_id) {
+    if (!buf || frame_id < 0 || frame_id >= (int)buf->metadata.size())
+        return std::shared_ptr<chartsMetadata>();
+    std::shared_ptr<metadataObject> meta = buf->metadata.at(frame_id);
+    return get_charts_metadata(meta);
+}
+
 
 #endif

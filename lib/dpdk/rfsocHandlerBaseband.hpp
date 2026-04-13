@@ -7,6 +7,7 @@
 #include "bufferContainer.hpp"
 #include "prometheusMetrics.hpp"
 #include "chartsMetadata.hpp"
+#include "BasebandMetadata.hpp"   // for BasebandMetadata
 #include "json.hpp"
 #include <util.h>
 #include <packet_copy.h>
@@ -109,11 +110,9 @@ protected:
         std::chrono::steady_clock::time_point start_time;
         bool in_warmup = true;
 
-        // Metadata 
-        uint32_t num_local_freq = 0;
-        uint32_t coarse_freq_start = 0;
-        std::vector<int> frame_coarse_freq;
-        
+        // Baseband Metadata pointer
+        uint64_t event_id = 0;
+        uint64_t freq_id = 0;
 
         // Prometheus metrics
         kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_packets_total_metric;
@@ -194,18 +193,6 @@ inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& un
                         config.get<std::string>(unique_name, "out_buffer"), unique_name);
         out_buf->register_producer(unique_name.c_str());
 
-        if (out_buf->metadata_pool == nullptr) {
-            FATAL_ERROR("rfsocHandler: Output buffer {:s} requires a metadata pool.",
-                        out_buf->buffer_name);
-        }
-
-        const std::string out_pool_type = out_buf->metadata_pool->type_name;
-        if (out_pool_type != "chartsMetadata") {
-            FATAL_ERROR("rfsocHandler: Output buffer {:s} must use chartsMetadata, got {:s}.",
-                        out_buf->buffer_name, out_pool_type);
-        }
-        INFO("rfsocHandler: Using chartsMetadata for output buffer {:s}.", out_buf->buffer_name);
-
         mask_buf = buffer_container.get_buffer(
             config.get<std::string>(unique_name, "mask_buf"));
         if (!mask_buf)
@@ -229,14 +216,6 @@ inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& un
         bytes_per_spec = subbands * bytes_per_sb; 
         specs_per_frame =  (out_buf->frame_size) / bytes_per_spec;
         packets_seen.resize(specs_per_frame, 0);
-
-        // Metadata frequency setup
-        num_local_freq = 672;
-        coarse_freq_start = 0;
-        frame_coarse_freq.resize(num_local_freq);
-        for (uint32_t i = 0; i < num_local_freq; ++i) {
-            frame_coarse_freq[i] = static_cast<int>(coarse_freq_start + i);
-        }
 
         start_time = std::chrono::steady_clock::now();
 
@@ -312,6 +291,7 @@ inline bool rfsocHandler::align_first_packet(uint64_t seq) {
 
     if ((seq % alignment) <= 1000) {
             INFO("rfsocHandler: Aligned at sequence {:d}", seq);
+            INFO("rfsocHandler: Time0 FPGA timestamp: {:d} microseconds", time0_fpga);
 
             last_seq = seq - seq % alignment; // The alignment must be multiple of the subbands
             got_first_packet = true;
@@ -353,10 +333,6 @@ inline bool rfsocHandler::handle_lost_samples(int64_t lost_units) {
 
 
 inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
-
-
-    struct timeval now;
-    gettimeofday(&now, nullptr);
 
     if (!first_time) {
 
@@ -403,40 +379,13 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
     frame_start_spec = new_spec;
 
     // Set metadata values
+    BasebandMetadata* out_metadata = nullptr;
     out_buf->allocate_new_metadata_object(out_frame_id);
-    auto out_meta_obj = out_buf->get_metadata(out_frame_id);
-
-    auto charts_meta = std::dynamic_pointer_cast<chartsMetadata>(out_meta_obj);
-    if (!charts_meta) {
-        FATAL_ERROR("rfsocHandler: Failed to cast output metadata to chartsMetadata.");
-        return false;
-    }
-
-    charts_meta->set_first_packet_recv_time(now); // the time when the first packet of the frame is received
-    charts_meta->set_fpga_seq_num(frame_start_spec); // the frame start spec 
-    charts_meta->set_time_downsampling_fpga(1);
-    charts_meta->set_coarse_freq(frame_coarse_freq);
-    charts_meta->set_lost_timesamples(0);
-    charts_meta->set_time0_fpga(time0_fpga); // Time0 when the FPGA sent the first packet 
-    charts_meta->dims = 3;
-    charts_meta->type = kotekan::int4x2;
-    std::strncpy(charts_meta->dim_name[0], "T", sizeof charts_meta->dim_name[0]); // Time dimension
-    std::strncpy(charts_meta->dim_name[1], "F", sizeof charts_meta->dim_name[1]); // Frequency dimension
-    std::strncpy(charts_meta->dim_name[2], "E", sizeof charts_meta->dim_name[2]); // Element dimension
-
-    // Lost samples buffer metadata
-    if (mask_buf->metadata_pool != nullptr && mask_buf->metadata_pool->type_name == "chartsMetadata") {
-        mask_buf->allocate_new_metadata_object(mask_frame_id);
-        auto mask_meta = std::dynamic_pointer_cast<chartsMetadata>(mask_buf->get_metadata(mask_frame_id));
-        if (mask_meta) {
-            mask_meta->set_fpga_seq_num(frame_start_spec);
-            mask_meta->set_time_downsampling_fpga(1);
-            mask_meta->set_first_packet_recv_time(now);
-            
-    
-        }
-    }
-
+    out_metadata = (BasebandMetadata*)(out_buf->get_metadata(out_frame_id).get());
+    out_metadata->event_id = 0;
+    out_metadata->freq_id = 0;
+    out_metadata->time0_fpga = time0_fpga;
+    out_metadata->frame_fpga_seq = frame_start_spec; // spec (sample) number
     return true;
 }
 
@@ -476,7 +425,7 @@ inline bool rfsocHandler::copy_packet(struct rte_mbuf* mbuf) {
     }
 
     seen |= bit;
-    if (seen == 0x0F) { // 4 subbands recieved 
+    if (seen == 0x0F) { // 4 subbands recibidas
         mask_frame[spec_loc] = 0;
         valid_specs_total++;
         rx_samples_total += 1;

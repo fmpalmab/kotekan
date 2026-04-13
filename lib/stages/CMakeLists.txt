@@ -50,6 +50,7 @@ add_library(
     timeDownsample.cpp
     frbPostProcess.cpp
     basebandReadout.cpp
+    chartsBasebandReadout.cpp
     BasebandWriter.cpp
     BaseWriter.cpp
     HFBWriter.cpp
