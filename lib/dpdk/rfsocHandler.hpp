@@ -21,6 +21,9 @@
 #include <cstdint>  
 
 // This is the RFoC Handler Class for the 32 antenna CHARTS deployment
+// Its important to note that on this handle, spectrum (spec) and sample 
+// are used interchangeably, and they refer to the data payload of one packet, 
+// which is 4 subbands in the current configuration.
 
 class rfsocHandler : public dpdkRXhandler {
 public:
@@ -46,14 +49,11 @@ protected:
         uint64_t packet_index = 0;
         uint32_t packets_written_in_frame = 0;
         
-
         //RFSoC parameters
         static constexpr uint32_t subbands = 4;
-        uint32_t bytes_per_sb = 0;
-        uint32_t bytes_per_spec = 0;
-
         static constexpr uint32_t rfsoc_header = 64;
-        uint32_t payload_len = packet_size - ETH_IP_UDP_HDR - rfsoc_header;
+        uint32_t bytes_per_sb = packet_size - ETH_IP_UDP_HDR - rfsoc_header; 
+        uint32_t bytes_per_spec = subbands * bytes_per_sb; // or bytes_per_sample 
         uint32_t payload_offset = ETH_IP_UDP_HDR + rfsoc_header;
 
         // Packet tracking
@@ -61,10 +61,12 @@ protected:
         uint64_t cur_seq = 0;
         uint64_t last_seq = 0;
 
+        // Sample or spec tracking (used interchangeably)
         uint64_t cur_spec = 0;
         uint64_t last_spec = 0;
         uint64_t frame_start_spec = 0;
 
+        // Other tracking variables
         uint8_t subband = 0;
         uint32_t timestamp_sec = 0;
         uint32_t timestamp_micro = 0;
@@ -83,16 +85,16 @@ protected:
 
         uint64_t rx_bytes_last = 0;
         uint64_t rx_lost_packets_last = 0;
-        uint64_t rx_out_of_order_last = 0;
         uint64_t rx_packets_last = 0;
 
+        // Mask buffer and frame to track missing samples
         Buffer* mask_buf = nullptr; //to track the missing samples
         uint8_t* mask_frame = nullptr;
         int mask_frame_id = 0;
-
+    
         std::string mask_name;
         uint64_t specs_per_frame = 0;
-        std::vector<uint8_t> packets_seen;
+        std::vector<uint8_t> packets_seen; // To track if the spectrum (or sample) is complete
         uint64_t valid_specs_total = 0;
 
 
@@ -120,11 +122,10 @@ protected:
         kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_samples_total_metric;
         kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_lost_packets_total_metric;
         kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_lost_samples_total_metric;
-
         kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_bytes_total_metric;
         kotekan::prometheus::MetricFamily<kotekan::prometheus::Gauge>& rx_error_total_metric;
 
-
+        // Helper functions
         inline uint64_t extract_seq_le64(const uint8_t* p) const {
             uint64_t v = 0;
             std::memcpy(&v, p, sizeof(uint64_t));
@@ -222,13 +223,9 @@ inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& un
         num_frames_captured = 0;
 
         first_packet = false;
-        rx_bytes_last = rx_bytes_total;
-        header_offset = payload_offset;
-        
-        bytes_per_sb = payload_len;
-        bytes_per_spec = subbands * bytes_per_sb; 
-        specs_per_frame =  (out_buf->frame_size) / bytes_per_spec;
-        packets_seen.resize(specs_per_frame, 0);
+        rx_bytes_last = rx_bytes_total;   
+        specs_per_frame = (out_buf->frame_size) / bytes_per_spec; // how many specs (or samples) fit in one frame
+        packets_seen.resize(specs_per_frame, 0); // All in 0 at the beginning, meaning no packets seen for any spec in the current frame
 
         // Metadata frequency setup
         num_local_freq = 672;
@@ -245,6 +242,8 @@ inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& un
 
 inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
 
+    // Warmup period handling, we discard all packets during the warmup time to allow the system to stabilize, and
+    // then start processing packets after that.
     if (in_warmup) {
         const auto now = std::chrono::steady_clock::now();
         const double elapsed_time =
@@ -257,31 +256,43 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
         }
     }
 
+    // Basic packet checks
     if (unlikely(!check_packet_basic(mbuf))) return 0;
 
+    // Extract sequence number, subband, and timestamp from the packet header
+    // The cur_seq is the sequence number of the packet, which increments by 1 for each packet.
+    // The subband is the subband number (0 to 3) that this packet corresponds to.
     const uint8_t* pkt = rte_pktmbuf_mtod(mbuf, const uint8_t*);
     cur_seq = extract_seq_le64(pkt + ETH_IP_UDP_HDR);
     subband = extract_subband_le8(pkt + ETH_IP_UDP_HDR + 8);
-    //DEBUG("rfsocHandler: Packet seq: {:d}, subband: {:d}", cur_seq, subband);
+    DEBUG("rfsocHandler: Packet seq: {:d}, subband: {:d}", cur_seq, subband);
 
     cur_spec = (cur_seq >> 2);  //  one spec are 4 packets
 
+    // Extract the timestamp from the packet header. The timestamp is in microseconds and is split 
+    // into two 32-bit little-endian integers for seconds and microseconds.
+    // The time0_fpga is the timestamp of the first packet sended by the FPGA when it starts
+    // So its the same for all the packets 
     timestamp_micro = extract_timestamp_le32(pkt + ETH_IP_UDP_HDR + 9);
     timestamp_sec = extract_timestamp_le32(pkt + ETH_IP_UDP_HDR + 13);
     time0_fpga = ((uint64_t)timestamp_sec) * 1000000ULL + ((uint64_t)timestamp_micro);
 
+    // Check for valid subband number
     if (unlikely(subband >= subbands)) {    
         INFO("rfsocHandler: Invalid subband number {:d} in packet. Discarding packet.", subband);
         rx_error_total +=1; 
         return 0;
     }
 
-
+    // If we haven't got the first packet yet, we need to align to the first packet that is a 
+    // multiple of the alignment parameter.
     if (unlikely(!got_first_packet)) {
         if (!align_first_packet(cur_seq)) return 0;
         // first packet, just copy it and move on (after alignment)
         return copy_packet(mbuf) ? (last_seq = cur_seq, 0) : -1;
     }
+
+    // Check for lost packets
     const int64_t seq_diff = (int64_t)cur_seq - (int64_t)last_seq;
     if (unlikely(seq_diff <= 0)) {
 
@@ -289,21 +300,26 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
         return 0;
     }
 
+    // If seq_diff > 1, then we have lost packets. We need to handle the lost samples corresponding to 
+    //those lost packets, and then copy the current packet.
     if (unlikely(seq_diff > 1)) {
         if (unlikely(!handle_lost_samples(seq_diff - 1)))
             return -1;
     }
 
-
+    // Copy the packet data to the output buffer
     if (unlikely(!copy_packet(mbuf))) {
         return -1;
     }
 
-    last_seq = cur_seq;
-
+    last_seq = cur_seq; // Update last_seq only after successfully handling the packet
     return 0;
 }
 
+// This function checks if the given sequence number is aligned with the specified alignment parameter.
+// If it is aligned, it initializes the first frame in the output buffer to start at the corresponding 
+// spectrum and marks it as full. This allows the handler to start processing packets from a known alignment 
+// point, which can be important for ensuring that frames are filled with complete spectra.
 inline bool rfsocHandler::align_first_packet(uint64_t seq) {
 
     if (alignment == 0){
@@ -328,7 +344,7 @@ inline bool rfsocHandler::align_first_packet(uint64_t seq) {
     }
 
 
-
+// This function handles lost samples when packets are lost.
 inline bool rfsocHandler::handle_lost_samples(int64_t lost_units) {
 
     uint64_t missing_seq = (uint64_t)last_seq + 1;
@@ -351,15 +367,14 @@ inline bool rfsocHandler::handle_lost_samples(int64_t lost_units) {
     return true;
 }
 
-
+// This function do the change of the active frame: it marks the current frame as full and moves to the next one, 
+// and also handles the mask buffer for lost samples.
 inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
-
 
     struct timeval now;
     gettimeofday(&now, nullptr);
 
     if (!first_time) {
-
         // Check for lost samples in the previous frame
         for (uint64_t i =0; i < specs_per_frame; i++) {
             if (packets_seen[i] != 0x0F) { // 4 subbands missing
@@ -369,26 +384,27 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
 
         DEBUG("advance_frame: closing frame_id {} start_spec {} valid_specs_total {}", out_frame_id, frame_start_spec, valid_specs_total);
 
-        //out_buf->allocate_new_metadata_object(out_frame_id);
+        // Mark the current output frame as full and move to the next one
         out_buf->mark_frame_full(unique_name, out_frame_id);
-        out_frame_id = (out_frame_id + 1) % out_buf->num_frames;
+        out_frame_id = (out_frame_id + 1) % out_buf->num_frames; // move to the next frame
 
         // Mask buffer handling
         mask_buf->mark_frame_full(mask_name.c_str(), mask_frame_id);
         mask_frame_id = (mask_frame_id + 1) % mask_buf->num_frames;
 
         num_frames_captured++;
-
     }
 
-    std::fill(packets_seen.begin(), packets_seen.end(), 0); // reset tracking
+    std::fill(packets_seen.begin(), packets_seen.end(), 0); // reset tracking for the new frame
 
+    // Check if we have reached the configured number of frames to capture
     if (capture_n_frames != 0 && num_frames_captured >= capture_n_frames) {
         INFO("rfsocHandler: Reached the configured number of frames to capture ({:d}). Stopping capture.",
              capture_n_frames);
         return false; // stop capturing
     }
 
+    // Wait for the new output frame to be empty and get its pointer
     out_frame = out_buf->wait_for_empty_frame(unique_name, out_frame_id);
     if (out_frame == nullptr) {
         return false;
@@ -399,6 +415,7 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
         return false;
     }
 
+    // Initialize the new frame (zero it out)
     std::memset(mask_frame, 1, specs_per_frame); // set all to missing
     frame_start_spec = new_spec;
 
@@ -432,49 +449,55 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
             mask_meta->set_fpga_seq_num(frame_start_spec);
             mask_meta->set_time_downsampling_fpga(1);
             mask_meta->set_first_packet_recv_time(now);
-            
-    
         }
     }
 
     return true;
 }
 
-
+// This function copies the packet data from the mbuf to the output frame in the correct location based 
+// on the sequence number and subband.
 inline bool rfsocHandler::copy_packet(struct rte_mbuf* mbuf) {
 
+    // We define the current spectrum ID based on the seq number of this packet
     const uint64_t spec_id = cur_seq >> 2; // one spec are 4 packets
 
+    // If the spec_id is less than the frame_start_spec, then this packet is out of order and belongs
+    // to a previous frame, so we discard it.
     if (spec_id < frame_start_spec) {
         rx_out_of_order_total++;
         return true; 
     }
 
-    uint64_t spec_loc = spec_id - frame_start_spec; // location in specs
+    // Location in specs relative to the start of the frame
+    uint64_t spec_loc = spec_id - frame_start_spec; 
 
     if (spec_loc >= specs_per_frame) { // need to advance frame
         if (!advance_frame(spec_id)) return false;
         spec_loc = 0;
     }
 
-    const size_t byte_offset = spec_loc * bytes_per_spec + subband * bytes_per_sb; // location in bytes
-    int pkt_offset = payload_offset;
+    // location in bytes where this packet should be copied in the output frame
+    const size_t byte_offset = spec_loc * bytes_per_spec + subband * bytes_per_sb; 
+    int pkt_offset = payload_offset; // The offset in the packet where the payload starts
 
+    // Check if the byte_offset is within the bounds of the output frame
     if (unlikely(byte_offset + bytes_per_sb > out_buf->frame_size)) {
         rx_error_total +=1;
-        return true; // fuera de rango
+        return true; //out of frame bounds
     }
 
+    // Copy the packet payload to the correct location in the output frame
     copy_block(&mbuf, &out_frame[byte_offset], bytes_per_sb, &pkt_offset);
 
-
     // Track received packets to the mask buffer
+    // So in this part we take a devolp decision: If we lost a packet (a subband of the spectrum)
+    // we mark the whole spectrum as lost in the mask buffer, even if we receive the other subbands of the same spectrum.
     uint8_t& seen = packets_seen[spec_loc];
     const uint8_t bit = uint8_t(1u << subband);
     if (seen & bit) {
         return true;
     }
-
     seen |= bit;
     if (seen == 0x0F) { // 4 subbands recieved 
         mask_frame[spec_loc] = 0;

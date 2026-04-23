@@ -58,7 +58,8 @@ def stream_raw_file(filename, process_spectrum, outdir_base):
             if frame == 0:
                 time0_fpga = int(meta[32:40].view(np.uint64)[0]) # Look into BasebandMetadata.cpp 
                 frame_fpga_seq = int(meta[64:72].view(np.int64)[0]) # Look into BasebandMetadata.cpp 
-        
+                
+                print(f"Metadata extracted - time0_fpga: {time0_fpga}, frame_fpga_seq: {frame_fpga_seq}")
                 start_time_us_global = (time0_fpga * 3 + frame_fpga_seq * 10) // 3 
 
                 folder_time = datetime.datetime.fromtimestamp(

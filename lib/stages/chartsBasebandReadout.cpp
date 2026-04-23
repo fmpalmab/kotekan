@@ -61,13 +61,16 @@ chartsBasebandReadout::chartsBasebandReadout(Config& config, const std::string& 
 void chartsBasebandReadout::main_thread() {
     int frame_id = 0;
 
+    // Loop until shutdown signal is received. 
     while (!stop_thread) {
         int in_buf_frame = frame_id % in_buf->num_frames;
 
+        // Wait for the next frame of input data to be full
         if (in_buf->wait_for_full_frame(unique_name, in_buf_frame) == nullptr) {
             break;
         }
 
+        // Add the frame to the manager and get the ID of any frame that was replaced
         int done_frame = add_replace_frame(frame_id);
         if (done_frame >= 0) {
             in_buf->mark_frame_empty(unique_name, done_frame % in_buf->num_frames);
@@ -267,7 +270,7 @@ bool chartsBasebandReadout::extract_data(const ChartsTriggerRequest& trigger,
         uint8_t* in_frame = in_buf->frames[in_buf_frame];
         int64_t frame_fpga_seq = meta->get_fpga_seq_num();
 
-        int64_t in_start = std::max<int64_t>(data_start_fpga - frame_fpga_seq, 0);
+        int64_t in_start = std::max<int64_t>(data_start_fpga - frame_fpga_seq, 0); // maximum of 0 and the offset to the start of the data in this frame
         int64_t in_end = std::min<int64_t>(data_end_fpga - frame_fpga_seq, _samples_per_data_set);
 
         while (in_start < in_end) {
@@ -301,7 +304,7 @@ bool chartsBasebandReadout::extract_data(const ChartsTriggerRequest& trigger,
                 out_meta->event_start_fpga = trigger.start_fpga;
                 out_meta->event_end_fpga = trigger.start_fpga + trigger.length_fpga;
                 out_meta->num_elements = _num_elements;
-                out_meta->frame_fpga_seq= frame_fpga_seq; // Review 
+                out_meta->frame_fpga_seq= frame_fpga_seq + in_start; // The FPGA seq of the first sample in this output frame
             }
 
             const int64_t copy_len = std::min<int64_t>(in_end - in_start, out_remaining);
