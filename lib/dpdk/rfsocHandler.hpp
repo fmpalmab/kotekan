@@ -332,7 +332,7 @@ inline bool rfsocHandler::align_first_packet(uint64_t seq) {
             last_seq = seq - seq % alignment; // The alignment must be multiple of the subbands
             got_first_packet = true;
 
-            const uint32_t start_spec = (last_seq >> 2); // spec start (4 packets)
+            const uint64_t start_spec = (last_seq >> 2); // spec start (4 packets)
 
             if (unlikely(!advance_frame(start_spec, true))) {
                 got_first_packet = false;
