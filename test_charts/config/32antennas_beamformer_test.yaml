@@ -1,0 +1,74 @@
+type: config
+log_level: INFO
+buffer_depth: 20 # max 1500 (RAM limit)
+cpu_affinity: [0,1]
+
+num_elements: 32 # antennas
+num_local_freq: 672 
+n_channels_per_packet: 168
+packets_per_spectrum: 4
+samples_per_data_set: 9600 # 32 ms
+bytes_per_dataset: n_channels_per_packet * packets_per_spectrum * samples_per_data_set
+
+main_pool:
+  kotekan_metadata_pool: chordMetadata
+  num_metadata_objects: buffer_depth*15
+
+# Buffers
+network_capture_buf:
+  kotekan_buffer: standard
+  num_frames: buffer_depth
+  frame_size: bytes_per_dataset * num_elements 
+  numa_node: 0
+  metadata_pool: main_pool
+  zero_new_frames: true
+
+beamformer_out_buf:
+  kotekan_buffer: standard
+  num_frames: buffer_depth
+  # Frame size calculation:
+  # Output is 32-bit floats (4 bytes per value).
+  # Output shape is [N_BEAMS x Freq x Time_Averaged]
+  # For 32 beams, 672 frequencies, and 50 time steps (15000 samples / 300 integration):
+  # 32 * 672 * 50 * 4 bytes = 4,300,800 bytes
+  frame_size: 4300800
+  metadata_pool: main_pool
+
+# Pipeline Stages
+gen_data:
+  type: random
+  seed: 1234
+  num_frames: 8
+  end_interrupt: false
+  kotekan_stage: testDataGen
+  out_buf: network_capture_buf
+
+gpu:
+    profiling: false
+    kernel_path: "lib/cuda/kernels"
+    commands: &command_list
+    - name: cudaInputData
+      in_buf: host_voltage
+      gpu_mem: voltage
+    - name: cudaSyncInput
+    - name: cudaBeamformer
+      gpu_mem_voltage: voltage
+      gpu_mem_beam_output: beam_output
+      num_elements: 32
+      num_local_freq: 672
+      samples_per_data_set: 15000
+      antenna_positions: "test_charts/config/beamformer_configs/antenna_positions.txt"
+      beam_positions: "test_charts/config/beamformer_configs/beam_directions.txt"
+    - name: cudaSyncOutput
+    - name: cudaOutputData
+      in_buf: host_voltage # Metadata transfer
+      gpu_mem: beam_output
+      out_buf: host_beamformer_out
+    gpu_0:
+      kotekan_stage: cudaProcess
+      gpu_id: 0 
+      commands: *command_list
+      in_buffers: 
+        host_voltage: network_capture_buf
+      out_buffers:
+        host_beamformer_out: beamformer_out_buf
