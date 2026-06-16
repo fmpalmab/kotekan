@@ -1,30 +1,50 @@
+---
 type: config
 log_level: INFO
-buffer_depth: 32 #16
-packets_per_frame: 20480 # 20480 
-packet_payload_size: 5376
 cpu_affinity: [0,1]
-samples_per_data_set: 81920 # 20480 packets x 4 spectra/packet: spectras per frame
-num_elements: 1344 # 2pol x 672chan (this should be the number of antennas x 2?)
 
+buffer_depth: 32
+baseband_buffer_depth: buffer_depth - 10
+capture_n_frames: 20
 
-#CHIME frame_size: 100.663.296 Bytes (125.8ms)
-#CPT frame_size: 20480 * 5376 = 110.100.480 Bytes (67.6ms)
+packets_per_frame: 20480
+packet_payload_size: 5376
+samples_per_data_set: 81920 # 20480 packets x 4 spectra/packet
+num_elements: 1344 # 2 pol x 672 channels
 
+# CPT frame_size: 81920 samples x 1344 bytes/sample = 110,100,480 bytes
 
 main_pool:
-  kotekan_metadata_pool: BasebandMetadata
-  num_metadata_objects: buffer_depth
+  kotekan_metadata_pool: chartsMetadata
+  num_metadata_objects: buffer_depth * 10
 
-# Buffer to hold captured network packets  
+baseband_pool:
+  kotekan_metadata_pool: BasebandMetadata
+  num_metadata_objects: buffer_depth * 10
+
 network_capture_buf:
   kotekan_buffer: standard
   num_frames: buffer_depth
-  frame_size:  packets_per_frame * packet_payload_size 
+  frame_size: samples_per_data_set * num_elements
   numa_node: 0
   metadata_pool: main_pool
-                           
-# DPDK Stage to capture network packets
+  zero_new_frames: true
+
+mask_buffer_zeros:
+  kotekan_buffer: standard
+  num_frames: buffer_depth
+  frame_size: samples_per_data_set
+  numa_node: 0
+  metadata_pool: main_pool
+
+baseband_output_buffer_0:
+  kotekan_buffer: standard
+  num_frames: baseband_buffer_depth
+  frame_size: samples_per_data_set * num_elements
+  numa_node: 0
+  metadata_pool: baseband_pool
+
+# DPDK Stage to capture CPT RFSoC packets.
 dpdk:
   kotekan_stage: dpdkCore
   lcore_cpu_map: [3]
@@ -34,14 +54,24 @@ dpdk:
   max_rx_pkt_len: 9000
   num_mbufs: 9600
   handlers:
-    - dpdk_handler: rfsocHandlerCPT # Use captureHandler to capture packets
+    - dpdk_handler: rfsocHandlerCPT
       out_buffer: network_capture_buf
+      mask_buf: mask_buffer_zeros
+      alignment: samples_per_data_set
 
+zero_samples:
+  kotekan_stage: zeroSamples
+  out_buf: network_capture_buf
+  lost_samples_buf: mask_buffer_zeros
+  zero_value: 0
+  sample_size: num_elements
 
-# Monitoring stages 
-#hexDump: # print hex dump of captured packets for debugging
- # kotekan_stage: hexDump
-  #in_buf: network_capture_buf
+baseband_readout:
+  kotekan_stage: chartsBasebandReadout
+  in_buf: network_capture_buf
+  out_buf: baseband_output_buffer_0
+  num_frames_buffer: buffer_depth - 10
+  max_dump_samples: samples_per_data_set * capture_n_frames
 
 inspect_frame:
   kotekan_stage: restInspectFrame
@@ -51,7 +81,6 @@ raw_file_write:
   kotekan_stage: BasebandWriter
   samples_per_data_set: samples_per_data_set
   num_elements: num_elements
-  in_buf: network_capture_buf
+  in_buf: baseband_output_buffer_0
   root_path: /data
   dump_timeout: 2
-
