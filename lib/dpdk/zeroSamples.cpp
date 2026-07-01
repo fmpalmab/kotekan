@@ -44,7 +44,7 @@ zeroSamples::zeroSamples(Config& config, const std::string& unique_name,
     lost_samples_buf = get_buffer("lost_samples_buf");
     lost_samples_buf->register_consumer(unique_name);
 
-    sample_size = config.get_default<uint32_t>(unique_name.c_str(), "sample_size", 2048);
+    sample_size = config.get_default<size_t>(unique_name.c_str(), "sample_size", 2048);
     zero_value = config.get_default<uint8_t>(unique_name.c_str(), "zero_value", 0x88);
 }
 
@@ -52,7 +52,7 @@ zeroSamples::~zeroSamples() {}
 
 void zeroSamples::main_thread() {
 
-    uint32_t zero_location;
+    size_t zero_location;
     int64_t lost_samples;
 
     while (!stop_thread) {
@@ -71,7 +71,7 @@ void zeroSamples::main_thread() {
         for (size_t i = 0; i < lost_samples_buf->frame_size; ++i) {
             zero_location = i * sample_size;
             // Check array bounds
-            assert((zero_location + sample_size) <= (uint32_t)out_buf->frame_size);
+            assert((zero_location + sample_size) <= (size_t)out_buf->frame_size);
             if (flag_frame[i] == 1) {
                 nt_memset((void*)(&data_frame[zero_location]), zero_value, sample_size);
                 lost_samples++;

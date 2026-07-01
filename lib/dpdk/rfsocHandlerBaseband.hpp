@@ -1,5 +1,5 @@
-#ifndef RFSOC_HANDLER_HPP
-#define RFSOC_HANDLER_HPP
+#ifndef RFSOC_HANDLER_BASEBAND_HPP
+#define RFSOC_HANDLER_BASEBAND_HPP
 
 #include "Config.hpp"
 #include "dpdkCore.hpp"
@@ -23,10 +23,10 @@
 
 // This is the RFoC Handler Class for the 32 antenna CHARTS deployment
 
-class rfsocHandler : public dpdkRXhandler {
+class rfsocHandlerBaseband : public dpdkRXhandler {
 public:
     /// Default constructor
-    rfsocHandler(kotekan::Config& config, const std::string& unique_name,
+    rfsocHandlerBaseband(kotekan::Config& config, const std::string& unique_name,
                     kotekan::bufferContainer& buffer_container, int port);
 
         int handle_packet(struct rte_mbuf* mbuf) override;
@@ -170,7 +170,7 @@ protected:
     bool copy_packet(struct rte_mbuf* mbuf);
 };
 
-inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& unique_name,
+inline rfsocHandlerBaseband::rfsocHandlerBaseband(kotekan::Config& config, const std::string& unique_name,
                                       kotekan::bufferContainer& buffer_container, int port) :
     dpdkRXhandler(config, unique_name, buffer_container, port), 
     rx_packets_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
@@ -189,14 +189,14 @@ inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& un
         out_buf = buffer_container.get_buffer(
             config.get<std::string>(unique_name, "out_buffer"));
         if (!out_buf)
-            FATAL_ERROR("rfsocHandler: Could not find output buffer {:s} for handler {:s}",
+            FATAL_ERROR("rfsocHandlerBaseband: Could not find output buffer {:s} for handler {:s}",
                         config.get<std::string>(unique_name, "out_buffer"), unique_name);
         out_buf->register_producer(unique_name.c_str());
 
         mask_buf = buffer_container.get_buffer(
             config.get<std::string>(unique_name, "mask_buf"));
         if (!mask_buf)
-            FATAL_ERROR("rfsocHandler: Could not find mask buffer {:s} for handler {:s}",
+            FATAL_ERROR("rfsocHandlerBaseband: Could not find mask buffer {:s} for handler {:s}",
                         config.get<std::string>(unique_name, "mask_buf"), unique_name);
         mask_name = unique_name + "_mask";
         mask_buf->register_producer(mask_name.c_str());
@@ -222,7 +222,7 @@ inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& un
 } ;
 
 
-inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
+inline int rfsocHandlerBaseband::handle_packet(struct rte_mbuf* mbuf) {
 
     if (in_warmup) {
         const auto now = std::chrono::steady_clock::now();
@@ -230,7 +230,7 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
             std::chrono::duration_cast<std::chrono::duration<double>>(now - start_time).count();
         if (elapsed_time >= warmup_time) {
             in_warmup = false;
-            INFO("rfsocHandler: Warmup period of {:.2f} seconds ended. Starting capture.", warmup_time);
+            INFO("rfsocHandlerBaseband: Warmup period of {:.2f} seconds ended. Starting capture.", warmup_time);
         } else {
             return 0; // discard packets during warmup
         }
@@ -241,7 +241,7 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
     const uint8_t* pkt = rte_pktmbuf_mtod(mbuf, const uint8_t*);
     cur_seq = extract_seq_le64(pkt + ETH_IP_UDP_HDR);
     subband = extract_subband_le8(pkt + ETH_IP_UDP_HDR + 8);
-    //DEBUG("rfsocHandler: Packet seq: {:d}, subband: {:d}", cur_seq, subband);
+    //DEBUG("rfsocHandlerBaseband: Packet seq: {:d}, subband: {:d}", cur_seq, subband);
 
     cur_spec = (cur_seq >> 2);  //  one spec are 4 packets
 
@@ -250,7 +250,7 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
     time0_fpga = ((uint64_t)timestamp_sec) * 1000000ULL + ((uint64_t)timestamp_micro);
 
     if (unlikely(subband >= subbands)) {    
-        INFO("rfsocHandler: Invalid subband number {:d} in packet. Discarding packet.", subband);
+        INFO("rfsocHandlerBaseband: Invalid subband number {:d} in packet. Discarding packet.", subband);
         rx_error_total +=1; 
         return 0;
     }
@@ -283,15 +283,15 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
     return 0;
 }
 
-inline bool rfsocHandler::align_first_packet(uint64_t seq) {
+inline bool rfsocHandlerBaseband::align_first_packet(uint64_t seq) {
 
     if (alignment == 0){
-        FATAL_ERROR("rfsocHandler: Alignment parameter must be set and greater than zero.");
+        FATAL_ERROR("rfsocHandlerBaseband: Alignment parameter must be set and greater than zero.");
     }
 
     if ((seq % alignment) <= 1000) {
-            INFO("rfsocHandler: Aligned at sequence {:d}", seq);
-            INFO("rfsocHandler: Time0 FPGA timestamp: {:d} microseconds", time0_fpga);
+            INFO("rfsocHandlerBaseband: Aligned at sequence {:d}", seq);
+            INFO("rfsocHandlerBaseband: Time0 FPGA timestamp: {:d} microseconds", time0_fpga);
 
             last_seq = seq - seq % alignment; // The alignment must be multiple of the subbands
             got_first_packet = true;
@@ -309,7 +309,7 @@ inline bool rfsocHandler::align_first_packet(uint64_t seq) {
 
 
 
-inline bool rfsocHandler::handle_lost_samples(int64_t lost_units) {
+inline bool rfsocHandlerBaseband::handle_lost_samples(int64_t lost_units) {
 
     uint64_t missing_seq = (uint64_t)last_seq + 1;
 
@@ -332,7 +332,7 @@ inline bool rfsocHandler::handle_lost_samples(int64_t lost_units) {
 }
 
 
-inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
+inline bool rfsocHandlerBaseband::advance_frame(uint64_t new_spec, bool first_time) {
 
     if (!first_time) {
 
@@ -360,7 +360,7 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
     std::fill(packets_seen.begin(), packets_seen.end(), 0); // reset tracking
 
     if (capture_n_frames != 0 && num_frames_captured >= capture_n_frames) {
-        INFO("rfsocHandler: Reached the configured number of frames to capture ({:d}). Stopping capture.",
+        INFO("rfsocHandlerBaseband: Reached the configured number of frames to capture ({:d}). Stopping capture.",
              capture_n_frames);
         return false; // stop capturing
     }
@@ -390,7 +390,7 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
 }
 
 
-inline bool rfsocHandler::copy_packet(struct rte_mbuf* mbuf) {
+inline bool rfsocHandlerBaseband::copy_packet(struct rte_mbuf* mbuf) {
 
     const uint64_t spec_id = cur_seq >> 2; // one spec are 4 packets
 
@@ -435,7 +435,7 @@ inline bool rfsocHandler::copy_packet(struct rte_mbuf* mbuf) {
 }
 
 
-inline void rfsocHandler::update_stats() {
+inline void rfsocHandlerBaseband::update_stats() {
     std::vector<std::string> port_label = {std::to_string(port)};
     rx_packets_total_metric.labels(port_label).set(rx_packets_total);
     rx_samples_total_metric.labels(port_label).set(rx_samples_total);

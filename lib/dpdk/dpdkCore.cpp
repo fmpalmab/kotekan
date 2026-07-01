@@ -31,7 +31,9 @@
 #include "iceBoardStandard.hpp" // for iceBoardStandard
 #include "iceBoardVDIF.hpp"     // for iceBoardVDIF
 #include "rfsocHandler.hpp"
+#include "rfsocHandlerShuffle.hpp"
 #include "rfsocHandlerCPT.hpp"
+#include "rfsocHandlerBaseband.hpp"
 
 #include "fmt.hpp"  // for compile_string_to_view, format, fmt, format_string
 #include "json.hpp" // for basic_json, iter_impl, json
@@ -195,13 +197,15 @@ void dpdkCore::create_handlers(bufferContainer& buffer_container) {
         } else if (handler_name == "iceBoardVDIF") {
             handlers[port] = new iceBoardVDIF(config, handler_unique_name, buffer_container, port);
         } else if (handler_name == "captureHandler") {
-            handlers[port] =
-                new captureHandler(config, handler_unique_name, buffer_container, port);
+            handlers[port] = new captureHandler(config, handler_unique_name, buffer_container, port);
         } else if (handler_name == "rfsocHandlerCPT") {
-            handlers[port] =
-                new rfsocHandlerCPT(config, handler_unique_name, buffer_container, port);        
+            handlers[port] = new rfsocHandlerCPT(config, handler_unique_name, buffer_container, port);
         } else if (handler_name == "rfsocHandler") {
             handlers[port] = new rfsocHandler(config, handler_unique_name, buffer_container, port);
+        } else if (handler_name == "rfsocHandlerShuffle") {
+            handlers[port] = new rfsocHandlerShuffle(config, handler_unique_name, buffer_container, port);
+        } else if (handler_name == "rfsocHandlerBaseband") {
+            handlers[port] = new rfsocHandlerBaseband(config, handler_unique_name, buffer_container, port);
         } else if (handler_name == "none") {
             handlers[port] = nullptr;
         } else {
