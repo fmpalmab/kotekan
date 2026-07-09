@@ -81,8 +81,7 @@ protected:
         uint8_t subband = 0;
         uint32_t timestamp_sec = 0;
         uint32_t timestamp_micro = 0;
-        uint32_t spectra_count = 0; // Spectra counter within the second.
-        uint64_t spectra_id = 0;
+        uint32_t spectra_count = 0; // Spectra counter within the second, used for timestamp only.
         uint32_t last_timestamp_sec = 0;
         uint32_t last_timestamp_micro = 0;
         uint64_t last_spectra_id = 0;
@@ -168,16 +167,11 @@ protected:
             return le32toh(t);
         }
 
-        inline uint64_t estimate_spectra_id(uint32_t sec, uint32_t count) const {
-            return (static_cast<uint64_t>(sec) * 300000ULL) + static_cast<uint64_t>(count);
-        }
-
-        inline uint32_t count_missing_packets(uint8_t seen) const {
-            uint8_t missing = complete_packet_mask & ~seen;
+        inline uint32_t count_bits(uint8_t mask) const {
             uint32_t count = 0;
-            while (missing != 0) {
-                count += missing & 1u;
-                missing >>= 1;
+            while (mask != 0) {
+                count += mask & 1u;
+                mask >>= 1;
             }
             return count;
         }
@@ -202,8 +196,6 @@ protected:
         };
 
     bool align_first_packet(uint64_t spec);
-
-    inline bool handle_lost_samples(int64_t lost_units);
 
     bool advance_frame(uint64_t new_seq, bool first_time=false);
 
@@ -364,26 +356,26 @@ inline int rfsocHandlerShuffle::handle_packet(struct rte_mbuf* mbuf) {
     // Basic packet checks
     if (unlikely(!check_packet_basic(mbuf))) return 0;
 
-    // Extract sequence number, subband, and timestamp from the packet header
-    // The cur_seq is the sequence number of the packet, which increments by 1 for each packet.
-    // The subband is the subband number (0 to 3) that this packet corresponds to.
+    // Extract sequence number, subband, and timestamp from the packet header.
+    // The sequence number is the spectrum ID; all packets for the same spectrum
+    // share it across subbands and RFSoCs.
     const uint8_t* pkt = rte_pktmbuf_mtod(mbuf, const uint8_t*);
     cur_seq = extract_seq_le64(pkt + ETH_IP_UDP_HDR);
     subband = extract_subband_le8(pkt + ETH_IP_UDP_HDR + 8);
     rfsoc_id = extract_rfsoc_id(pkt + ETH_IP_UDP_HDR + rfsoc_id_header_offset);
     //DEBUG("rfsocHandlerShuffle: Packet seq: {:d}, subband: {:d}", cur_seq, subband);
 
-    // Estimate the spectrum ID from the RFSoC timestamp fields until it is sent directly.
+    cur_spec = cur_seq;
+
+    // Extract timestamp fields for metadata and status logging.
     timestamp_sec = extract_timestamp_le32(pkt + ETH_IP_UDP_HDR + 13);
     spectra_count = extract_timestamp_le32(pkt + ETH_IP_UDP_HDR + 9);
-    spectra_id = estimate_spectra_id(timestamp_sec, spectra_count);
     timestamp_micro =
         (static_cast<uint64_t>(spectra_count) * 1000000ULL) / 300000ULL;
     time0_fpga = ((uint64_t)timestamp_sec) * 1000000ULL + ((uint64_t)timestamp_micro);
     last_timestamp_sec = timestamp_sec;
     last_timestamp_micro = timestamp_micro;
-    last_spectra_id = spectra_id;
-    cur_spec = spectra_id;
+    last_spectra_id = cur_spec;
 
     // Check for valid subband number
     if (unlikely(subband >= subbands)) {
@@ -451,29 +443,6 @@ inline bool rfsocHandlerShuffle::align_first_packet(uint64_t spec) {
     }
 
 
-// This function handles lost samples when packets are lost.
-inline bool rfsocHandlerShuffle::handle_lost_samples(int64_t lost_units) {
-
-    uint64_t missing_seq = (uint64_t)last_seq + 1;
-
-    while (lost_units > 0) {
-
-        const uint64_t miss_spec = (missing_seq >> 2); // spec missing (4 packets)
-
-        const uint64_t spec_offset = miss_spec - frame_start_spec;
-
-        // Check if we need to advance the frame
-        if (spec_offset * bytes_per_spec >= out_buf->frame_size) {
-            if (!advance_frame(miss_spec)) return false;
-        }
-
-        rx_lost_packets_total++;
-        missing_seq++;
-        lost_units--;
-    }
-    return true;
-}
-
 // This function do the change of the active frame: it marks the current frame as full and moves to the next one,
 // and also handles the mask buffer for lost samples.
 inline bool rfsocHandlerShuffle::advance_frame(uint64_t new_spec, bool first_time) {
@@ -484,12 +453,13 @@ inline bool rfsocHandlerShuffle::advance_frame(uint64_t new_spec, bool first_tim
     if (!first_time) {
         // Check for lost samples in the previous frame.
         for (uint64_t i =0; i < specs_per_frame; i++) {
-            if (packets_seen[i] == complete_packet_mask) {
+            const uint8_t missing_packet_mask = complete_packet_mask & ~packets_seen[i];
+            if (missing_packet_mask == 0) {
                 mask_frame[i] = 0;
             } else {
                 mask_frame[i] = 1;
                 rx_lost_samples_total +=1;
-                rx_lost_packets_total += count_missing_packets(packets_seen[i]);
+                rx_lost_packets_total += count_bits(missing_packet_mask);
             }
         }
 
@@ -571,6 +541,7 @@ inline bool rfsocHandlerShuffle::advance_frame(uint64_t new_spec, bool first_tim
 // on the sequence number and subband.
 inline bool rfsocHandlerShuffle::copy_packet(struct rte_mbuf* mbuf) {
 
+    // The packet sequence number is already the spectrum ID.
     const uint64_t spec_id = cur_spec;
 
     // If the spec_id is less than the frame_start_spec, then this packet is out of order and belongs

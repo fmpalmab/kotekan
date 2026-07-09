@@ -69,6 +69,7 @@ protected:
         uint8_t subband = 0;
         uint32_t timestamp_sec = 0;
         uint32_t timestamp_micro = 0;
+        uint32_t spectra_count = 0; // Spectra counter within the second, used for timestamp only.
         uint64_t time0_fpga = 0;
         uint32_t header_offset = 0;
         
@@ -142,6 +143,15 @@ protected:
             return le32toh(t);
         }
 
+        inline uint32_t count_bits(uint8_t mask) const {
+            uint32_t count = 0;
+            while (mask != 0) {
+                count += mask & 1u;
+                mask >>= 1;
+            }
+            return count;
+        }
+
 
         inline bool check_packet_basic(struct rte_mbuf* mbuf){
             if (unlikely(mbuf == nullptr)) {
@@ -161,9 +171,7 @@ protected:
         return true;
         };
 
-    bool align_first_packet(uint64_t seq);
-
-    inline bool handle_lost_samples(int64_t lost_units);
+    bool align_first_packet(uint64_t spec);
 
     bool advance_frame(uint64_t new_seq, bool first_time=false);
 
@@ -243,10 +251,14 @@ inline int rfsocHandlerBaseband::handle_packet(struct rte_mbuf* mbuf) {
     subband = extract_subband_le8(pkt + ETH_IP_UDP_HDR + 8);
     //DEBUG("rfsocHandlerBaseband: Packet seq: {:d}, subband: {:d}", cur_seq, subband);
 
-    cur_spec = (cur_seq >> 2);  //  one spec are 4 packets
+    // The sequence number is the spectrum ID; all packets for the same spectrum
+    // share it across subbands.
+    cur_spec = cur_seq;
 
-    timestamp_micro = extract_timestamp_le32(pkt + ETH_IP_UDP_HDR + 9);
     timestamp_sec = extract_timestamp_le32(pkt + ETH_IP_UDP_HDR + 13);
+    spectra_count = extract_timestamp_le32(pkt + ETH_IP_UDP_HDR + 9);
+    timestamp_micro =
+        (static_cast<uint64_t>(spectra_count) * 1000000ULL) / 300000ULL;
     time0_fpga = ((uint64_t)timestamp_sec) * 1000000ULL + ((uint64_t)timestamp_micro);
 
     if (unlikely(subband >= subbands)) {    
@@ -257,46 +269,36 @@ inline int rfsocHandlerBaseband::handle_packet(struct rte_mbuf* mbuf) {
 
 
     if (unlikely(!got_first_packet)) {
-        if (!align_first_packet(cur_seq)) return 0;
-        // first packet, just copy it and move on (after alignment)
-        return copy_packet(mbuf) ? (last_seq = cur_seq, 0) : -1;
-    }
-    const int64_t seq_diff = (int64_t)cur_seq - (int64_t)last_seq;
-    if (unlikely(seq_diff <= 0)) {
-
-        rx_out_of_order_total++;
-        return 0;
+        if (!align_first_packet(cur_spec)) return 0;
     }
 
-    if (unlikely(seq_diff > 1)) {
-        if (unlikely(!handle_lost_samples(seq_diff - 1)))
-            return -1;
-    }
-
-
+    // Copy the packet data to the output buffer. Packet loss is tracked by the
+    // per-spectrum completion mask because all subbands can share the same seq.
     if (unlikely(!copy_packet(mbuf))) {
         return -1;
     }
 
-    last_seq = cur_seq;
+    if (cur_seq > last_seq) {
+        last_seq = cur_seq;
+    }
 
     return 0;
 }
 
-inline bool rfsocHandlerBaseband::align_first_packet(uint64_t seq) {
+inline bool rfsocHandlerBaseband::align_first_packet(uint64_t spec) {
 
     if (alignment == 0){
         FATAL_ERROR("rfsocHandlerBaseband: Alignment parameter must be set and greater than zero.");
     }
 
-    if ((seq % alignment) <= 1000) {
-            INFO("rfsocHandlerBaseband: Aligned at sequence {:d}", seq);
+    if ((spec % alignment) <= 1000) {
+            INFO("rfsocHandlerBaseband: Aligned at spectrum {:d}", spec);
             INFO("rfsocHandlerBaseband: Time0 FPGA timestamp: {:d} microseconds", time0_fpga);
 
-            last_seq = seq - seq % alignment; // The alignment must be multiple of the subbands
+            last_seq = cur_seq;
             got_first_packet = true;
 
-            const uint32_t start_spec = (last_seq >> 2); // spec start (4 packets)
+            const uint64_t start_spec = spec - (spec % alignment);
 
             if (unlikely(!advance_frame(start_spec, true))) {
                 got_first_packet = false;
@@ -308,38 +310,19 @@ inline bool rfsocHandlerBaseband::align_first_packet(uint64_t seq) {
     }
 
 
-
-inline bool rfsocHandlerBaseband::handle_lost_samples(int64_t lost_units) {
-
-    uint64_t missing_seq = (uint64_t)last_seq + 1;
-
-    while (lost_units > 0) {
-
-        const uint64_t miss_spec = (missing_seq >> 2); // spec missing (4 packets)
-
-        const uint64_t spec_offset = miss_spec - frame_start_spec;
-
-        // Check if we need to advance the frame
-        if (spec_offset * bytes_per_spec >= out_buf->frame_size) {
-            if (!advance_frame(miss_spec)) return false;
-        }
-
-        rx_lost_packets_total++;
-        missing_seq++;
-        lost_units--;
-    }
-    return true;
-}
-
-
 inline bool rfsocHandlerBaseband::advance_frame(uint64_t new_spec, bool first_time) {
 
     if (!first_time) {
 
-        // Check for lost samples in the previous frame
+        // Check for lost samples in the previous frame.
         for (uint64_t i =0; i < specs_per_frame; i++) {
-            if (packets_seen[i] != 0x0F) { // 4 subbands missing
+            const uint8_t missing_packet_mask = uint8_t(0x0F & ~packets_seen[i]);
+            if (missing_packet_mask == 0) {
+                mask_frame[i] = 0;
+            } else {
+                mask_frame[i] = 1;
                 rx_lost_samples_total +=1;
+                rx_lost_packets_total += count_bits(missing_packet_mask);
             }
         }
 
@@ -392,7 +375,8 @@ inline bool rfsocHandlerBaseband::advance_frame(uint64_t new_spec, bool first_ti
 
 inline bool rfsocHandlerBaseband::copy_packet(struct rte_mbuf* mbuf) {
 
-    const uint64_t spec_id = cur_seq >> 2; // one spec are 4 packets
+    // The packet sequence number is already the spectrum ID.
+    const uint64_t spec_id = cur_spec;
 
     if (spec_id < frame_start_spec) {
         rx_out_of_order_total++;
@@ -406,23 +390,23 @@ inline bool rfsocHandlerBaseband::copy_packet(struct rte_mbuf* mbuf) {
         spec_loc = 0;
     }
 
+    // Track received packets to the mask buffer.
+    uint8_t& seen = packets_seen[spec_loc];
+    const uint8_t bit = uint8_t(1u << subband);
+    if (seen & bit) {
+        return true;
+    }
+
     const size_t byte_offset = spec_loc * bytes_per_spec + subband * bytes_per_sb; // location in bytes
-    int pkt_offset = payload_offset;
 
     if (unlikely(byte_offset + bytes_per_sb > out_buf->frame_size)) {
         rx_error_total +=1;
         return true; // fuera de rango
     }
 
+    int pkt_offset = payload_offset;
     copy_block(&mbuf, &out_frame[byte_offset], bytes_per_sb, &pkt_offset);
 
-
-    // Track received packets to the mask buffer
-    uint8_t& seen = packets_seen[spec_loc];
-    const uint8_t bit = uint8_t(1u << subband);
-    if (seen & bit) {
-        return true;
-    }
 
     seen |= bit;
     if (seen == 0x0F) { // 4 subbands recibidas
