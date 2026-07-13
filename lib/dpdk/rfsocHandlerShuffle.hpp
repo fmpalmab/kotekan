@@ -13,10 +13,12 @@
 #include <endian.h>
 #include <arpa/inet.h>
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <immintrin.h>
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -66,6 +68,12 @@ protected:
         uint8_t rfsoc_id = 0;
         uint8_t complete_packet_mask = 0x0F;
         std::vector<uint8_t> packet_payload;
+        struct PacketLayout {
+            uint8_t bit = 0;
+            uint32_t freq_base_offset = 0;
+            uint32_t antenna_output_offset = 0;
+        };
+        std::array<PacketLayout, 8> packet_layout;
 
         // Packet tracking
         bool first_packet = false;
@@ -101,6 +109,10 @@ protected:
         uint64_t rx_bytes_last = 0;
         uint64_t rx_lost_packets_last = 0;
         uint64_t rx_packets_last = 0;
+        uint64_t dpdk_ipackets_last = 0;
+        uint64_t dpdk_imissed_last = 0;
+        uint64_t dpdk_ierrors_last = 0;
+        uint64_t dpdk_rx_nombuf_last = 0;
 
         // Mask buffer and frame to track missing samples
         Buffer* mask_buf = nullptr; //to track the missing samples
@@ -174,6 +186,87 @@ protected:
                 mask >>= 1;
             }
             return count;
+        }
+
+        template <bool aligned_dst>
+        inline void copy_rfsoc_payload_32x64(uint8_t* dst, const uint8_t* src) const {
+            constexpr uint32_t src_stride = 32;
+            constexpr uint32_t dst_stride = 64;
+            constexpr uint32_t unroll = 8;
+            uint32_t freq = 0;
+
+            // Each packet fills one 32-byte half of a 64-byte output cache line.
+            // Cached stores let the companion RFSoC packet complete that line in cache.
+            for (; freq + unroll <= n_channels_per_packet; freq += unroll) {
+                const __m256i value0 =
+                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 0 * src_stride));
+                const __m256i value1 =
+                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 1 * src_stride));
+                const __m256i value2 =
+                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 2 * src_stride));
+                const __m256i value3 =
+                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 3 * src_stride));
+                const __m256i value4 =
+                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 4 * src_stride));
+                const __m256i value5 =
+                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 5 * src_stride));
+                const __m256i value6 =
+                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 6 * src_stride));
+                const __m256i value7 =
+                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src + 7 * src_stride));
+
+                if (aligned_dst) {
+                    _mm256_store_si256(reinterpret_cast<__m256i*>(dst + 0 * dst_stride), value0);
+                    _mm256_store_si256(reinterpret_cast<__m256i*>(dst + 1 * dst_stride), value1);
+                    _mm256_store_si256(reinterpret_cast<__m256i*>(dst + 2 * dst_stride), value2);
+                    _mm256_store_si256(reinterpret_cast<__m256i*>(dst + 3 * dst_stride), value3);
+                    _mm256_store_si256(reinterpret_cast<__m256i*>(dst + 4 * dst_stride), value4);
+                    _mm256_store_si256(reinterpret_cast<__m256i*>(dst + 5 * dst_stride), value5);
+                    _mm256_store_si256(reinterpret_cast<__m256i*>(dst + 6 * dst_stride), value6);
+                    _mm256_store_si256(reinterpret_cast<__m256i*>(dst + 7 * dst_stride), value7);
+                } else {
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + 0 * dst_stride), value0);
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + 1 * dst_stride), value1);
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + 2 * dst_stride), value2);
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + 3 * dst_stride), value3);
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + 4 * dst_stride), value4);
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + 5 * dst_stride), value5);
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + 6 * dst_stride), value6);
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst + 7 * dst_stride), value7);
+                }
+
+                src += unroll * src_stride;
+                dst += unroll * dst_stride;
+            }
+
+            for (; freq < n_channels_per_packet; ++freq) {
+                const __m256i value =
+                    _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src));
+                if (aligned_dst) {
+                    _mm256_store_si256(reinterpret_cast<__m256i*>(dst), value);
+                } else {
+                    _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst), value);
+                }
+                src += src_stride;
+                dst += dst_stride;
+            }
+        }
+
+        inline void copy_rfsoc_payload(uint8_t* dst, const uint8_t* src) const {
+            if (likely(num_elements_per_rfsoc == 32 && num_elements == 64)) {
+                if (likely((reinterpret_cast<uintptr_t>(dst) & 0x1F) == 0)) {
+                    copy_rfsoc_payload_32x64<true>(dst, src);
+                } else {
+                    copy_rfsoc_payload_32x64<false>(dst, src);
+                }
+                return;
+            }
+
+            for (uint32_t freq = 0; freq < n_channels_per_packet; ++freq) {
+                std::memcpy(dst, src, num_elements_per_rfsoc);
+                src += num_elements_per_rfsoc;
+                dst += num_elements;
+            }
         }
 
 
@@ -327,6 +420,17 @@ inline rfsocHandlerShuffle::rfsocHandlerShuffle(kotekan::Config& config, const s
                 expected_packets_per_spec);
         }
         complete_packet_mask = static_cast<uint8_t>((1u << expected_packets_per_spec) - 1u);
+        packet_layout.fill({});
+        for (uint32_t subband_slot = 0; subband_slot < subbands_per_nic; ++subband_slot) {
+            for (uint32_t rf_id = 0; rf_id < num_rfsocs; ++rf_id) {
+                const uint32_t bit_index = subband_slot * num_rfsocs + rf_id;
+                packet_layout[bit_index].bit = uint8_t(1u << bit_index);
+                packet_layout[bit_index].freq_base_offset =
+                    subband_slot * n_channels_per_packet * num_elements;
+                packet_layout[bit_index].antenna_output_offset =
+                    (num_rfsocs - 1 - rf_id) * num_elements_per_rfsoc;
+            }
+        }
         INFO(
             "rfsocHandlerShuffle: Port {:d} first_subband {:d}, coarse_freq_start {:d}, "
             "layout {:d} freq x {:d} elements, {:d} packets/spec.",
@@ -348,6 +452,10 @@ inline int rfsocHandlerShuffle::handle_packet(struct rte_mbuf* mbuf) {
             std::chrono::duration_cast<std::chrono::duration<double>>(now - start_time).count();
         if (elapsed_time >= warmup_time) {
             in_warmup = false;
+            last_status_message_time = 0.0;
+            rx_packets_last = rx_packets_total;
+            rx_lost_packets_last = rx_lost_packets_total;
+            rx_bytes_last = rx_bytes_total;
         } else {
             return 0; // discard packets during warmup
         }
@@ -560,14 +668,13 @@ inline bool rfsocHandlerShuffle::copy_packet(struct rte_mbuf* mbuf) {
     }
 
     const uint32_t subband_slot = subband - first_subband;
-    const uint32_t antenna_output_offset =
-        (num_rfsocs - 1 - rfsoc_id) * num_elements_per_rfsoc;
+    const uint32_t bit_index = subband_slot * num_rfsocs + rfsoc_id;
+    const PacketLayout& layout = packet_layout[bit_index];
     const size_t spec_offset = spec_loc * bytes_per_spec;
 
     // Track received packets to the mask buffer.
     uint8_t& seen = packets_seen[spec_loc];
-    const uint32_t bit_index = subband_slot * num_rfsocs + rfsoc_id;
-    const uint8_t bit = uint8_t(1u << bit_index);
+    const uint8_t bit = layout.bit;
     if (seen & bit) {
         return true;
     }
@@ -578,18 +685,21 @@ inline bool rfsocHandlerShuffle::copy_packet(struct rte_mbuf* mbuf) {
         return true; //out of frame bounds
     }
 
-    struct rte_mbuf* copy_mbuf = mbuf;
-    int pkt_offset = payload_offset; // The offset in the packet where the payload starts
-    copy_block(&copy_mbuf, packet_payload.data(), bytes_per_sb, &pkt_offset);
-
-    for (uint32_t freq_local_packet = 0; freq_local_packet < n_channels_per_packet;
-         ++freq_local_packet) {
-        const uint32_t freq_handler = subband_slot * n_channels_per_packet + freq_local_packet;
-        const size_t dst_offset =
-            spec_offset + freq_handler * num_elements + antenna_output_offset;
-        const size_t src_offset = freq_local_packet * num_elements_per_rfsoc;
-        std::memcpy(&out_frame[dst_offset], &packet_payload[src_offset], num_elements_per_rfsoc);
+    const uint8_t* payload = nullptr;
+    if (likely(mbuf->data_len >= payload_offset + bytes_per_sb)) {
+        payload = rte_pktmbuf_mtod_offset(mbuf, const uint8_t*, payload_offset);
+    } else {
+        payload = static_cast<const uint8_t*>(
+            rte_pktmbuf_read(mbuf, payload_offset, bytes_per_sb, packet_payload.data()));
+        if (unlikely(payload == nullptr)) {
+            rx_error_total += 1;
+            return true;
+        }
     }
+
+    uint8_t* dst =
+        &out_frame[spec_offset + layout.freq_base_offset + layout.antenna_output_offset];
+    copy_rfsoc_payload(dst, payload);
 
     seen |= bit;
     if (seen == complete_packet_mask) {
@@ -637,13 +747,31 @@ inline void rfsocHandlerShuffle::update_stats() {
         last_status_message_time = 0.0;
     }
 
+    if (last_status_message_time == 0.0) {
+        last_status_message_time = time_now;
+        rx_packets_last = rx_packets_total;
+        rx_lost_packets_last = rx_lost_packets_total;
+        rx_bytes_last = rx_bytes_total;
+
+        struct rte_eth_stats eth_stats;
+        std::memset(&eth_stats, 0, sizeof eth_stats);
+        if (rte_eth_stats_get(port, &eth_stats) == 0) {
+            dpdk_ipackets_last = eth_stats.ipackets;
+            dpdk_imissed_last = eth_stats.imissed;
+            dpdk_ierrors_last = eth_stats.ierrors;
+            dpdk_rx_nombuf_last = eth_stats.rx_nombuf;
+        }
+        return;
+    }
+
     if ((time_now - last_status_message_time) > status_cadence) {
 
         const uint64_t d_packets = rx_packets_total - rx_packets_last;
         const uint64_t d_lost = rx_lost_packets_total - rx_lost_packets_last;
         const uint64_t d_bytes =rx_bytes_total - rx_bytes_last;
+        const double dt = time_now - last_status_message_time;
 
-        const double mbps = (double)d_bytes * 8.0 / (status_cadence * 1e6);
+        const double mbps = (double)d_bytes * 8.0 / (dt * 1e6);
 
         INFO(
             "RFSoC port {:d} | RX pkt {:d} (+{:d}) | lost {:d} (+{:d}) | "
@@ -658,6 +786,27 @@ inline void rfsocHandlerShuffle::update_stats() {
         INFO(
             "Last timestamp: sec {:d} micro {:d} | spectra_id {:d} | Frame start spec {:d}",
             last_timestamp_sec, last_timestamp_micro, last_spectra_id, frame_start_spec);
+
+        struct rte_eth_stats eth_stats;
+        std::memset(&eth_stats, 0, sizeof eth_stats);
+        if (rte_eth_stats_get(port, &eth_stats) == 0) {
+            INFO(
+                "DPDK port {:d} stats | ipackets {:d} (+{:d}) | imissed {:d} (+{:d}) | "
+                "ierrors {:d} (+{:d}) | rx_nombuf {:d} (+{:d})",
+                port,
+                eth_stats.ipackets, eth_stats.ipackets - dpdk_ipackets_last,
+                eth_stats.imissed, eth_stats.imissed - dpdk_imissed_last,
+                eth_stats.ierrors, eth_stats.ierrors - dpdk_ierrors_last,
+                eth_stats.rx_nombuf, eth_stats.rx_nombuf - dpdk_rx_nombuf_last);
+
+            dpdk_ipackets_last = eth_stats.ipackets;
+            dpdk_imissed_last = eth_stats.imissed;
+            dpdk_ierrors_last = eth_stats.ierrors;
+            dpdk_rx_nombuf_last = eth_stats.rx_nombuf;
+        } else {
+            WARN("rfsocHandlerShuffle: Failed to read DPDK stats for port {:d}.", port);
+        }
+
         rx_packets_last = rx_packets_total;
         rx_lost_packets_last = rx_lost_packets_total;
         rx_bytes_last = rx_bytes_total;
