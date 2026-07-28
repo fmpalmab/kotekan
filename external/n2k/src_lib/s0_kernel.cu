@@ -108,7 +108,7 @@ __device__ uint _cmask(int b)
 //   - Within the larger kernel, the warp mapping is:
 //       wz wy wx <-> (tds) (f/4) (s/128)
 
-__global__ void s0_kernel(ulong4_16a *s0, const uint *pl, int T, int Tmin, int Tsize, int F, int S, int Nds, int out_fstride4)
+__global__ void s0_kernel(ulong4 *s0, const uint *pl, int T, int Tmin, int Tsize, int F, int S, int Nds, int out_fstride4)
 {
     static constexpr uint ALL_LANES = 0xffffffffU;
 
@@ -141,8 +141,8 @@ __global__ void s0_kernel(ulong4_16a *s0, const uint *pl, int T, int Tmin, int T
     long pl_stride = long(Fds) * long(S >> 2);
 
     // Shift output pointer, including time and laneId.
-    // Before the shifts, 's0' has shape ulong4_16a[T/Nds, F, S/4].
-    // After the shifts, 's0' has shape ulong4_16a[4] and stride 'out_fstride4'.
+    // Before the shifts, 's0' has shape ulong4[T/Nds, F, S/4].
+    // After the shifts, 's0' has shape ulong4[4] and stride 'out_fstride4'.
     
     s0 += (sds << 1);
     s0 += long(fds << 2) * long(out_fstride4);
@@ -171,7 +171,7 @@ __global__ void s0_kernel(ulong4_16a *s0, const uint *pl, int T, int Tmin, int T
     s0_accum <<= 1;
     s0_accum += __shfl_sync(ALL_LANES, s0_accum, threadIdx.x ^ 0x1);
 
-    ulong4_16a s0_x4;
+    ulong4 s0_x4;
     s0_x4.x = s0_accum;
     s0_x4.y = s0_accum;
     s0_x4.z = s0_accum;
@@ -260,7 +260,7 @@ void launch_s0_kernel(ulong* s0, const ulong* pl_mask, long T, long Tmin, long T
     gputils::assign_kernel_dims(nblocks, nthreads, S >> 2, (F+3) >> 2, Tds);
 
     s0_kernel <<< nblocks, nthreads, 0, stream >>>
-        ((ulong4_16a *) s0, (const uint *) pl_mask, T, Tmin, Tsize, F, S, Nds, out_fstride >> 2);
+        ((ulong4 *) s0, (const uint *) pl_mask, T, Tmin, Tsize, F, S, Nds, out_fstride >> 2);
     
     CUDA_PEEK("s0_kernel launch");
 }

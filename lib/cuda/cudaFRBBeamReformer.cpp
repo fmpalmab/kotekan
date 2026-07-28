@@ -13,7 +13,7 @@
 #include <array>
 #include <cassert>
 #include <cstdlib>
-#include <cublas_api.h>   // for cublasContext, cublasHandle_t
+//#include <cublas_api.h>   // for cublasContext, cublasHandle_t
 #include <cublas_v2.h>    // for cublasCreate, cublasDestroy, cublasSetStream
 #include <driver_types.h> // for cudaEvent_t
 #include <string>
