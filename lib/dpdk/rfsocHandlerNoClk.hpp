@@ -1,5 +1,5 @@
-#ifndef RFSOC_HANDLER_HPP
-#define RFSOC_HANDLER_HPP
+#ifndef RFSOC_HANDLER_NO_CLK_HPP
+#define RFSOC_HANDLER_NO_CLK_HPP
 
 #include "Config.hpp"
 #include "dpdkCore.hpp"
@@ -25,10 +25,10 @@
 // are used interchangeably, and they refer to the data payload of one packet, 
 // which is 4 subbands in the current configuration.
 
-class rfsocHandler : public dpdkRXhandler {
+class rfsocHandlerNoClk : public dpdkRXhandler {
 public:
     /// Default constructor
-    rfsocHandler(kotekan::Config& config, const std::string& unique_name,
+    rfsocHandlerNoClk(kotekan::Config& config, const std::string& unique_name,
                     kotekan::bufferContainer& buffer_container, int port);
 
         int handle_packet(struct rte_mbuf* mbuf) override;
@@ -52,6 +52,7 @@ protected:
         //RFSoC parameters
         static constexpr uint32_t subbands = 4;
         static constexpr uint32_t rfsoc_header = 64;
+        uint32_t packets_per_spectrum = 4;
         uint32_t bytes_per_sb = packet_size - ETH_IP_UDP_HDR - rfsoc_header; 
         uint32_t bytes_per_spec = subbands * bytes_per_sb; // or bytes_per_sample 
         uint32_t payload_offset = ETH_IP_UDP_HDR + rfsoc_header;
@@ -180,7 +181,7 @@ protected:
     bool copy_packet(struct rte_mbuf* mbuf);
 };
 
-inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& unique_name,
+inline rfsocHandlerNoClk::rfsocHandlerNoClk(kotekan::Config& config, const std::string& unique_name,
                                       kotekan::bufferContainer& buffer_container, int port) :
     dpdkRXhandler(config, unique_name, buffer_container, port), 
     rx_packets_total_metric(kotekan::prometheus::Metrics::instance().add_gauge(
@@ -199,32 +200,37 @@ inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& un
         out_buf = buffer_container.get_buffer(
             config.get<std::string>(unique_name, "out_buffer"));
         if (!out_buf)
-            FATAL_ERROR("rfsocHandler: Could not find output buffer {:s} for handler {:s}",
+            FATAL_ERROR("rfsocHandlerNoClk: Could not find output buffer {:s} for handler {:s}",
                         config.get<std::string>(unique_name, "out_buffer"), unique_name);
         out_buf->register_producer(unique_name.c_str());
 
         if (out_buf->metadata_pool == nullptr) {
-            FATAL_ERROR("rfsocHandler: Output buffer {:s} requires a metadata pool.",
+            FATAL_ERROR("rfsocHandlerNoClk: Output buffer {:s} requires a metadata pool.",
                         out_buf->buffer_name);
         }
 
         const std::string out_pool_type = out_buf->metadata_pool->type_name;
         if (out_pool_type != "chartsMetadata") {
-            FATAL_ERROR("rfsocHandler: Output buffer {:s} must use chartsMetadata, got {:s}.",
+            FATAL_ERROR("rfsocHandlerNoClk: Output buffer {:s} must use chartsMetadata, got {:s}.",
                         out_buf->buffer_name, out_pool_type);
         }
-        INFO("rfsocHandler: Using chartsMetadata for output buffer {:s}.", out_buf->buffer_name);
+        INFO("rfsocHandlerNoClk: Using chartsMetadata for output buffer {:s}.", out_buf->buffer_name);
 
         mask_buf = buffer_container.get_buffer(
             config.get<std::string>(unique_name, "mask_buf"));
         if (!mask_buf)
-            FATAL_ERROR("rfsocHandler: Could not find mask buffer {:s} for handler {:s}",
+            FATAL_ERROR("rfsocHandlerNoClk: Could not find mask buffer {:s} for handler {:s}",
                         config.get<std::string>(unique_name, "mask_buf"), unique_name);
         mask_name = unique_name + "_mask";
         mask_buf->register_producer(mask_name.c_str());
         mask_buf->zero_frames();
 
         alignment = config.get_default<uint64_t>(unique_name, "alignment", 0);
+        packets_per_spectrum = config.get_default<uint32_t>(unique_name, "packets_per_spectrum",
+                                                              subbands);
+        if (packets_per_spectrum == 0) {
+            FATAL_ERROR("rfsocHandlerNoClk: packets_per_spectrum must be greater than zero.");
+        }
     
         // Number of frames to capture before stopping, 0 = unlimited
         capture_n_frames = config.get_default<uint64_t>(unique_name, "capture_n_frames", 0);
@@ -248,7 +254,7 @@ inline rfsocHandler::rfsocHandler(kotekan::Config& config, const std::string& un
 } ;
 
 
-inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
+inline int rfsocHandlerNoClk::handle_packet(struct rte_mbuf* mbuf) {
 
     // Warmup period handling, we discard all packets during the warmup time to allow the system to stabilize, and
     // then start processing packets after that.
@@ -258,7 +264,7 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
             std::chrono::duration_cast<std::chrono::duration<double>>(now - start_time).count();
         if (elapsed_time >= warmup_time) {
             in_warmup = false;
-            INFO("rfsocHandler: Warmup period of {:.2f} seconds ended. Starting capture.", warmup_time);
+            INFO("rfsocHandlerNoClk: Warmup period of {:.2f} seconds ended. Starting capture.", warmup_time);
         } else {
             return 0; // discard packets during warmup
         }
@@ -268,14 +274,14 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
     if (unlikely(!check_packet_basic(mbuf))) return 0;
 
     // Extract sequence number, subband, and timestamp from the packet header.
-    // The sequence number is the spectrum ID; all packets for the same spectrum
-    // share it across subbands.
+    // The sequence number advances over the packets of each spectrum, so we group
+    // packets_per_spectrum packets into one spectrum before tracking completeness.
     const uint8_t* pkt = rte_pktmbuf_mtod(mbuf, const uint8_t*);
     cur_seq = extract_seq_le64(pkt + ETH_IP_UDP_HDR);
     subband = extract_subband_le8(pkt + ETH_IP_UDP_HDR + 8);
-    DEBUG("rfsocHandler: Packet seq: {:d}, subband: {:d}", cur_seq, subband);
+    DEBUG("rfsocHandlerNoClk: Packet seq: {:d}, subband: {:d}", cur_seq, subband);
 
-    cur_spec = cur_seq;
+    cur_spec = cur_seq / packets_per_spectrum;
 
     // Extract timestamp fields for metadata and status logging.
     timestamp_sec = extract_timestamp_le32(pkt + ETH_IP_UDP_HDR + 13);
@@ -286,7 +292,7 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
 
     // Check for valid subband number
     if (unlikely(subband >= subbands)) {    
-        INFO("rfsocHandler: Invalid subband number {:d} in packet. Discarding packet.", subband);
+        INFO("rfsocHandlerNoClk: Invalid subband number {:d} in packet. Discarding packet.", subband);
         rx_error_total +=1; 
         return 0;
     }
@@ -298,7 +304,7 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
     }
 
     // Copy the packet data to the output buffer. Packet loss is tracked by the
-    // per-spectrum completion mask because all subbands can share the same seq.
+    // per-spectrum completion mask using the four packets that belong to the same spectrum.
     if (unlikely(!copy_packet(mbuf))) {
         return -1;
     }
@@ -313,14 +319,14 @@ inline int rfsocHandler::handle_packet(struct rte_mbuf* mbuf) {
 // If it is aligned, it initializes the first frame in the output buffer to start at the corresponding 
 // spectrum and marks it as full. This allows the handler to start processing packets from a known alignment 
 // point, which can be important for ensuring that frames are filled with complete spectra.
-inline bool rfsocHandler::align_first_packet(uint64_t spec) {
+inline bool rfsocHandlerNoClk::align_first_packet(uint64_t spec) {
 
     if (alignment == 0){
-        FATAL_ERROR("rfsocHandler: Alignment parameter must be set and greater than zero.");
+        FATAL_ERROR("rfsocHandlerNoClk: Alignment parameter must be set and greater than zero.");
     }
 
     if ((spec % alignment) <= 1000) {
-            INFO("rfsocHandler: Aligned at spectrum {:d}", spec);
+            INFO("rfsocHandlerNoClk: Aligned at spectrum {:d}", spec);
 
             last_seq = cur_seq;
             got_first_packet = true;
@@ -338,7 +344,7 @@ inline bool rfsocHandler::align_first_packet(uint64_t spec) {
 
 // This function do the change of the active frame: it marks the current frame as full and moves to the next one, 
 // and also handles the mask buffer for lost samples.
-inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
+inline bool rfsocHandlerNoClk::advance_frame(uint64_t new_spec, bool first_time) {
 
     struct timeval now;
     gettimeofday(&now, nullptr);
@@ -373,7 +379,7 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
 
     // Check if we have reached the configured number of frames to capture
     if (capture_n_frames != 0 && num_frames_captured >= capture_n_frames) {
-        INFO("rfsocHandler: Reached the configured number of frames to capture ({:d}). Stopping capture.",
+        INFO("rfsocHandlerNoClk: Reached the configured number of frames to capture ({:d}). Stopping capture.",
              capture_n_frames);
         return false; // stop capturing
     }
@@ -399,7 +405,7 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
 
     auto charts_meta = std::dynamic_pointer_cast<chartsMetadata>(out_meta_obj);
     if (!charts_meta) {
-        FATAL_ERROR("rfsocHandler: Failed to cast output metadata to chartsMetadata.");
+        FATAL_ERROR("rfsocHandlerNoClk: Failed to cast output metadata to chartsMetadata.");
         return false;
     }
 
@@ -431,9 +437,9 @@ inline bool rfsocHandler::advance_frame(uint64_t new_spec, bool first_time) {
 
 // This function copies the packet data from the mbuf to the output frame in the correct location based 
 // on the sequence number and subband.
-inline bool rfsocHandler::copy_packet(struct rte_mbuf* mbuf) {
+inline bool rfsocHandlerNoClk::copy_packet(struct rte_mbuf* mbuf) {
 
-    // The packet sequence number is already the spectrum ID.
+    // cur_spec is derived from the serial packet sequence number above.
     const uint64_t spec_id = cur_spec;
 
     // If the spec_id is less than the frame_start_spec, then this packet is out of order and belongs
@@ -484,7 +490,7 @@ inline bool rfsocHandler::copy_packet(struct rte_mbuf* mbuf) {
 }
 
 
-inline void rfsocHandler::update_stats() {
+inline void rfsocHandlerNoClk::update_stats() {
     std::vector<std::string> port_label = {std::to_string(port)};
     rx_packets_total_metric.labels(port_label).set(rx_packets_total);
     rx_samples_total_metric.labels(port_label).set(rx_samples_total);

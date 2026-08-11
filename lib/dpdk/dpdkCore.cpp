@@ -30,7 +30,7 @@
 #include "iceBoardShuffle.hpp"  // for iceBoardShuffle
 #include "iceBoardStandard.hpp" // for iceBoardStandard
 #include "iceBoardVDIF.hpp"     // for iceBoardVDIF
-#include "rfsocHandler.hpp"
+#include "rfsocHandlerNoClk.hpp"
 #include "rfsocHandlerShuffle.hpp"
 #include "rfsocHandlerCPT.hpp"
 #include "rfsocHandlerBaseband.hpp"
@@ -86,9 +86,10 @@ dpdkCore::dpdkCore(Config& config, const string& unique_name, bufferContainer& b
         RTE_ETH_RX_OFFLOAD_KEEP_CRC | RTE_ETH_RX_OFFLOAD_IPV4_CKSUM | RTE_ETH_RX_OFFLOAD_UDP_CKSUM;
 
 
-    // TODO reference why this needs to be 2048
-    const uint32_t max_data_size = 2048;
-    const uint32_t mbuf_size = max_data_size + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM;
+    const uint32_t mbuf_data_size =
+        config.get_default<uint32_t>(unique_name, "mbuf_data_size", 2048);
+    const uint32_t mbuf_size = mbuf_data_size + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM;
+    INFO("DPDK mbuf data size: {:d} bytes, mbuf size: {:d} bytes", mbuf_data_size, mbuf_size);
 
     // Convert the lcore to port map into a simple c style struct
     // This is basically done to remove overhead in the critial packet processing loop.
@@ -200,8 +201,8 @@ void dpdkCore::create_handlers(bufferContainer& buffer_container) {
             handlers[port] = new captureHandler(config, handler_unique_name, buffer_container, port);
         } else if (handler_name == "rfsocHandlerCPT") {
             handlers[port] = new rfsocHandlerCPT(config, handler_unique_name, buffer_container, port);
-        } else if (handler_name == "rfsocHandler") {
-            handlers[port] = new rfsocHandler(config, handler_unique_name, buffer_container, port);
+        } else if (handler_name == "rfsocHandlerNoClk") {
+            handlers[port] = new rfsocHandlerNoClk(config, handler_unique_name, buffer_container, port);
         } else if (handler_name == "rfsocHandlerShuffle") {
             handlers[port] = new rfsocHandlerShuffle(config, handler_unique_name, buffer_container, port);
         } else if (handler_name == "rfsocHandlerBaseband") {
