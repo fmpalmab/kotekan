@@ -180,11 +180,9 @@ void cudaDeviceInterface::build(const std::string& kernel_filename,
     for (auto& s : opts)
         cstrings.push_back(s.c_str());
 
-    // AÑADIR ESTO (paths para que funcione cuda::std via CCCL)
     cstrings.push_back("--include-path=/usr/local/cuda/include");
     cstrings.push_back("--include-path=/usr/local/cuda/include/cccl");
 
-    // (opcional pero recomendable)
     cstrings.push_back("--std=c++17");
 
     // Compile the kernel
@@ -192,7 +190,6 @@ void cudaDeviceInterface::build(const std::string& kernel_filename,
 
     if (res != NVRTC_SUCCESS) {
 
-        // 1) Log de NVRTC (lo más importante)
         size_t logSize = 0;
         nvrtcGetProgramLogSize(prog, &logSize);
 
