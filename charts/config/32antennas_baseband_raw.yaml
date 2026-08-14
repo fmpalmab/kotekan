@@ -72,7 +72,8 @@ raw_file_write:
   kotekan_stage: rawFileWrite
   in_buf: network_capture_buf
   file_name: network_0
-  base_dir: /data/32_test
+  # Replaced by the run script so the capture directory can be selected at runtime.
+  base_dir: "__RAW_DIR__"
   file_ext: bin
   num_frames_per_file: 1
   exit_after_n_files: capture_n_frames

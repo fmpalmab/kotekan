@@ -1,8 +1,4 @@
 ---
-
-# This Config File is used to test the pipeline with the old 32 antenna model without the clock singal.
-# Its a simple test that captures N frames of data and saves them to disk. The data is not processed in any way.
-
 ########################
 #### Global options ####
 ########################
@@ -17,15 +13,16 @@ num_elements: 32
 n_channels_per_packet: 168
 packets_per_spectrum: 4
 
-buffer_depth: 60
+buffer_depth: 80
 baseband_buffer_depth: buffer_depth - 10
 
-spectra_per_dataset: 15360 # 50 ms of data (one frame)
+spectra_per_dataset: 15360 # 51.2 ms of data (one frame)
 bytes_per_dataset: n_channels_per_packet * packets_per_spectrum * spectra_per_dataset # 50 ms of data
 
 # For basebandReadout
 samples_per_data_set: 15360 
-capture_n_frames: 40 
+capture_n_frames: 30 
+
 
 ###########################
 ##### Pipeline buffers ####
@@ -78,9 +75,8 @@ dpdk:
     - [0]
   max_rx_pkt_len: 9000
   num_mbufs: 9600
-  mbuf_data_size: 9000
   handlers:
-    - dpdk_handler: rfsocHandlerNoClk
+    - dpdk_handler: rfsocHandlerNoClk 
       out_buffer: network_capture_buf
       alignment: 4000
       mask_buf: mask_buffer_zeros
@@ -101,6 +97,7 @@ baseband_readout:
   num_frames_buffer: buffer_depth - 10
   max_dump_samples: samples_per_data_set * capture_n_frames
 
+
 # Save baseband data
 baseband_save:
   kotekan_stage: BasebandWriter
@@ -108,7 +105,7 @@ baseband_save:
   num_elements: 32 
   in_buf: baseband_output_buffer_0
   root_path: /data/32_test # Config (flag)
-  dump_timeout: 5
+  dump_timeout: 1
 # Monitoring and debug stages ####
 
 inspect_frame:

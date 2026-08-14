@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 """Visualize RFSoC antenna intensity from rawFileWrite frames.
 
-Examples:
-    # Last five files from NIC/handler 0, all physical antennas.
-    python3 test_charts/plot_raw_intensity_64.py --handler 0
-
-    # First two matching frames from both handlers, selected physical antennas.
-    python3 test_charts/plot_raw_intensity_64.py \
-        --handler both --file-count 2 --file-position first \
-        --antennas 0-7,31,63 --time-bin-spectra 64
+Example:
+    # All frames from one 32-element raw capture, all physical antennas.
+    python3 charts/plot_raw_baseband.py --data-dir /data/32_test/raw \
+        --handler 0 --elements 32 --channels 672 --file-count 0 \
+        --antennas all --exclude-zero-spectra --scale db
 
 The voltage payload is byte-sized int4x2, so payload endianness does not apply.
-Metadata endianness and nibble/IQ encoding are configurable independently.
+Metadata endianness and nibble/IQ encoding are configurable independently. The CHARTS raw format uses high-nibble real and low-nibble imaginary by default.
 """
 
 from __future__ import annotations
@@ -26,8 +23,8 @@ import numpy as np
 
 
 DEFAULT_SPECTRA_PER_FRAME = 15360
-DEFAULT_CHANNELS = 336
-DEFAULT_ELEMENTS = 64
+DEFAULT_CHANNELS = 672
+DEFAULT_ELEMENTS = 32
 DEFAULT_SPECTRA_PER_SECOND = 300000.0
 DEFAULT_FREQ0_MHZ = 300.0
 DEFAULT_CHANNEL_WIDTH_MHZ = 0.3
@@ -79,7 +76,7 @@ def parse_antenna_selection(value: str, num_elements: int) -> list[int]:
 
 
 def physical_antenna_to_element(antenna: int, num_elements: int) -> int:
-    """Map physical antenna 0..63 to the descending output E index."""
+    """Map physical antenna 0..31 to the descending output E index."""
     return num_elements - 1 - antenna
 
 
@@ -286,97 +283,6 @@ def antenna_ticks(axis, antennas: list[int]) -> None:
     axis.set_yticklabels([str(antennas[position]) for position in positions])
 
 
-def plot_frequency_maps(
-    mean_intensity: np.ndarray,
-    max_intensity: np.ndarray,
-    antennas: list[int],
-    frequency_mhz: np.ndarray,
-    scale: str,
-    db_floor: float,
-    color_min: float | None,
-    color_max: float | None,
-    output_path: Path,
-) -> None:
-    import matplotlib.pyplot as plt
-
-    mean_display = scale_intensity(mean_intensity, scale, db_floor)
-    max_display = scale_intensity(max_intensity, scale, db_floor)
-    label = "Intensity [I^2 + Q^2]" if scale == "linear" else "Intensity [dB]"
-
-    figure, axes = plt.subplots(2, 1, figsize=(13, 9), sharex=True, constrained_layout=True)
-    for axis, values, title in zip(
-        axes,
-        (mean_display, max_display),
-        ("Mean intensity over selected spectra", "Maximum intensity over selected spectra"),
-    ):
-        image = axis.imshow(
-            values,
-            aspect="auto",
-            origin="lower",
-            interpolation="nearest",
-            extent=(
-                frequency_mhz[0] - DEFAULT_CHANNEL_WIDTH_MHZ / 2,
-                frequency_mhz[-1] + DEFAULT_CHANNEL_WIDTH_MHZ / 2,
-                -0.5,
-                len(antennas) - 0.5,
-            ),
-            vmin=color_min,
-            vmax=color_max,
-        )
-        axis.set_ylabel("Physical antenna")
-        axis.set_title(title)
-        antenna_ticks(axis, antennas)
-        figure.colorbar(image, ax=axis, label=label, pad=0.01)
-    axes[-1].set_xlabel("Frequency [MHz]")
-    figure.savefig(output_path, dpi=160)
-    plt.close(figure)
-
-
-def plot_time_maps(
-    time_mean: np.ndarray,
-    time_max: np.ndarray,
-    time_seconds: np.ndarray,
-    antennas: list[int],
-    scale: str,
-    db_floor: float,
-    color_min: float | None,
-    color_max: float | None,
-    output_path: Path,
-) -> None:
-    import matplotlib.pyplot as plt
-
-    mean_display = scale_intensity(time_mean.T, scale, db_floor)
-    max_display = scale_intensity(time_max.T, scale, db_floor)
-    label = "Intensity [I^2 + Q^2]" if scale == "linear" else "Intensity [dB]"
-    time_start = float(time_seconds[0])
-    time_stop = float(time_seconds[-1])
-    if time_stop <= time_start:
-        time_stop = time_start + 1.0
-
-    figure, axes = plt.subplots(2, 1, figsize=(13, 9), sharex=True, constrained_layout=True)
-    for axis, values, title in zip(
-        axes,
-        (mean_display, max_display),
-        ("Mean intensity per time bin and antenna", "Maximum intensity per time bin and antenna"),
-    ):
-        image = axis.imshow(
-            values,
-            aspect="auto",
-            origin="lower",
-            interpolation="nearest",
-            extent=(time_start, time_stop, -0.5, len(antennas) - 0.5),
-            vmin=color_min,
-            vmax=color_max,
-        )
-        axis.set_ylabel("Physical antenna")
-        axis.set_title(title)
-        antenna_ticks(axis, antennas)
-        figure.colorbar(image, ax=axis, label=label, pad=0.01)
-    axes[-1].set_xlabel("Time since selected data start [s]")
-    figure.savefig(output_path, dpi=160)
-    plt.close(figure)
-
-
 def plot_spectra_grid(
     intensity: np.ndarray,
     antennas: list[int],
@@ -399,6 +305,14 @@ def plot_spectra_grid(
         squeeze=False,
         constrained_layout=True,
     )
+    finite = display[np.isfinite(display)]
+    if finite.size:
+        y_min = float(np.min(finite))
+        y_max = float(np.max(finite))
+        padding = max(0.5, 0.05 * (y_max - y_min))
+        y_limits = (y_min - padding, y_max + padding)
+    else:
+        y_limits = None
     for index, axis in enumerate(axes.flat):
         if index >= len(antennas):
             axis.set_visible(False)
@@ -406,7 +320,8 @@ def plot_spectra_grid(
         axis.plot(frequency_mhz, display[index], linewidth=0.65)
         axis.set_title(f"Antenna {antennas[index]}", fontsize=9)
         axis.grid(alpha=0.2)
-        axis.set_ylim(-20, 15)
+        if y_limits is not None:
+            axis.set_ylim(*y_limits)
     figure.suptitle(f"{statistic.capitalize()} intensity spectrum")
     figure.supxlabel("Frequency [MHz]")
     figure.supylabel("Intensity" if scale == "linear" else "Intensity [dB]")
@@ -418,8 +333,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Plot mean and peak intensity for all or selected physical RFSoC antennas."
     )
-    parser.add_argument("--data-dir", type=Path, default=Path("/data/32_test"))
-    parser.add_argument("--handler", choices=("0", "1", "both"), default="0")
+    parser.add_argument("--data-dir", type=Path, default=Path("/data/32_test/raw"))
+    parser.add_argument("--handler", choices=("0",), default="0", help="Single raw input handler for the 32-element model")
     parser.add_argument(
         "--pattern",
         help=(
@@ -430,8 +345,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--file-count",
         type=int,
-        default=5,
-        help="Number of files to use; 0 means all files (default: 5)",
+        default=0,
+        help="Number of files to use; 0 means all files (default: all)",
     )
     parser.add_argument(
         "--file-position",
@@ -442,7 +357,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--antennas",
         default="all",
-        help="Physical antennas: all, a comma list, or ranges such as 0-7,31,63",
+        help="Physical antennas: all, a comma list, or ranges such as 0-7,31",
     )
     parser.add_argument("--channel-start", type=int, default=0, help="First local channel")
     parser.add_argument("--channel-stop", type=int, help="Exclusive last local channel")
@@ -484,8 +399,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--iq-order",
         choices=("ri", "ir"),
-        default="ri",
-        help="ri: low nibble real; ir: low nibble imaginary",
+        default="ir",
+        help="ri: low nibble real; ir: low nibble imaginary (CHARTS default)",
     )
     parser.add_argument(
         "--exclude-zero-spectra",
@@ -494,9 +409,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--scale", choices=("linear", "db"), default="db")
     parser.add_argument("--db-floor", type=float, default=-60.0)
-    parser.add_argument("--color-min", type=float, help="Fixed heatmap lower color limit")
-    parser.add_argument("--color-max", type=float, help="Fixed heatmap upper color limit")
-    parser.add_argument("--spectra-grid", action="store_true", help="Also create antenna panels")
     parser.add_argument(
         "--grid-stat", choices=("mean", "max"), default="mean", help="Statistic for panels"
     )
@@ -517,9 +429,6 @@ def validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> 
         args.channel_stop = args.channels
     if not 0 <= args.channel_start < args.channel_stop <= args.channels:
         parser.error("channel range must satisfy 0 <= start < stop <= channels")
-    if args.color_min is not None and args.color_max is not None:
-        if args.color_min >= args.color_max:
-            parser.error("--color-min must be lower than --color-max")
 
 
 def main() -> None:
@@ -564,13 +473,8 @@ def main() -> None:
     included_spectra = 0
     zero_spectra = 0
     inspected_spectra = 0
-    time_centers: list[float] = []
-    time_mean_rows: list[np.ndarray] = []
-    time_max_rows: list[np.ndarray] = []
-    time_zero_fraction: list[float] = []
     fpga_sequences: list[int] = []
     group_spectra: list[int] = []
-    time_origin_fpga: float | None = None
 
     print(
         f"handlers={handlers}, aligned intervals={len(file_groups)}, antennas={antennas}, "
@@ -662,19 +566,6 @@ def main() -> None:
                     frequency_max, np.max(valid_power, axis=0).T
                 )
                 included_spectra += valid_count
-                time_mean = np.mean(valid_power, axis=(0, 1), dtype=np.float64)
-                time_max = np.max(valid_power, axis=(0, 1))
-            else:
-                time_mean = np.full(len(antennas), np.nan, dtype=np.float64)
-                time_max = np.full(len(antennas), np.nan, dtype=np.float32)
-
-            fpga_center = group.fpga_start + 0.5 * (start + stop)
-            if time_origin_fpga is None:
-                time_origin_fpga = float(group.fpga_start + start)
-            time_centers.append((fpga_center - time_origin_fpga) / args.spectra_per_second)
-            time_mean_rows.append(time_mean)
-            time_max_rows.append(time_max)
-            time_zero_fraction.append(float(np.mean(any_handler_zero)))
 
         del frames
         details = ", ".join(
@@ -699,9 +590,6 @@ def main() -> None:
 
     mean_intensity = frequency_sum / included_spectra
     frequency_max[~np.isfinite(frequency_max)] = np.nan
-    time_mean = np.asarray(time_mean_rows, dtype=np.float64)
-    time_max = np.asarray(time_max_rows, dtype=np.float32)
-    time_seconds = np.asarray(time_centers, dtype=np.float64)
     zero_fraction = zero_spectra / inspected_spectra if inspected_spectra else math.nan
 
     if len(fpga_sequences) > 1:
@@ -713,46 +601,20 @@ def main() -> None:
 
     output_prefix = args.output_prefix or Path(f"raw_intensity_network_{args.handler}")
     output_prefix.parent.mkdir(parents=True, exist_ok=True)
-    frequency_path = output_prefix.with_name(f"{output_prefix.name}_frequency.png")
-    time_path = output_prefix.with_name(f"{output_prefix.name}_time.png")
+    grid_path = output_prefix.with_name(f"{output_prefix.name}_grid.png")
     npz_path = output_prefix.with_suffix(".npz")
 
     try:
-        plot_frequency_maps(
-            mean_intensity,
-            frequency_max,
+        grid_data = mean_intensity if args.grid_stat == "mean" else frequency_max
+        plot_spectra_grid(
+            grid_data,
             antennas,
             frequency_mhz,
+            args.grid_stat,
             args.scale,
             args.db_floor,
-            args.color_min,
-            args.color_max,
-            frequency_path,
+            grid_path,
         )
-        plot_time_maps(
-            time_mean,
-            time_max,
-            time_seconds,
-            antennas,
-            args.scale,
-            args.db_floor,
-            args.color_min,
-            args.color_max,
-            time_path,
-        )
-        if args.spectra_grid:
-            grid_path = output_prefix.with_name(f"{output_prefix.name}_grid.png")
-            grid_data = mean_intensity if args.grid_stat == "mean" else frequency_max
-            plot_spectra_grid(
-                grid_data,
-                antennas,
-                frequency_mhz,
-                args.grid_stat,
-                args.scale,
-                args.db_floor,
-                grid_path,
-            )
-            print(f"Saved {grid_path}")
     except ImportError as error:
         raise SystemExit("matplotlib is required to generate intensity plots") from error
 
@@ -766,10 +628,6 @@ def main() -> None:
         frequency_mhz=frequency_mhz,
         mean_intensity=mean_intensity,
         max_intensity=frequency_max,
-        time_seconds=time_seconds,
-        time_mean_intensity=time_mean,
-        time_max_intensity=time_max,
-        time_zero_fraction=np.asarray(time_zero_fraction, dtype=np.float64),
         fpga_seq=np.asarray(fpga_sequences, dtype=np.int64),
         aligned_spectra=np.asarray(group_spectra, dtype=np.int64),
         handler_offset=np.asarray(
@@ -791,8 +649,6 @@ def main() -> None:
         f"({100.0 * zero_fraction:.3f}%)"
     )
     print(f"Spectra included in mean: {included_spectra}")
-    print(f"Saved {frequency_path}")
-    print(f"Saved {time_path}")
     print(f"Saved {npz_path}")
 
 

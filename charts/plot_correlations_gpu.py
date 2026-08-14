@@ -4,7 +4,8 @@
 The correlation payload is the cudaCorrelatorAstron layout:
     [local_frequency, lower-triangle receiver baseline, pol_y, pol_x, real_imag]
 where every pair of input elements is recovered through its receiver/polarization
-indices.  The selected files are averaged as complex visibilities before plotting.
+indices. The selected files are integrated as complex visibilities before plotting
+their phase.
 """
 
 from __future__ import annotations
@@ -105,18 +106,21 @@ def plot_element_pairs(
     frequencies_mhz: np.ndarray,
     output_path: Path,
 ) -> None:
-    """Make one multi-panel spectrum plot for one selected input element."""
+    """Make one multi-panel phase spectrum scatter plot for a selected input."""
     partners = [element for element in selected if element != reference]
     columns = min(4, len(partners))
     rows = math.ceil(len(partners) / columns)
     figure, axes = plt.subplots(rows, columns, figsize=(4.6 * columns, 2.9 * rows), squeeze=False)
 
     for axis, partner in zip(axes.flat, partners):
-        amplitude = np.abs(extract_visibility(correlation, reference, partner, polarizations))
-        axis.plot(frequencies_mhz, amplitude, linewidth=0.7)
-        axis.set_title(f"|V[{reference}, {partner}]|", fontsize=10)
+        phase_degrees = np.degrees(
+            np.angle(extract_visibility(correlation, reference, partner, polarizations))
+        )
+        axis.scatter(frequencies_mhz, phase_degrees, s=4, alpha=0.75, linewidths=0)
+        axis.set_title(f"arg V[{reference}, {partner}]", fontsize=10)
         axis.set_xlabel("Frequency [MHz]", fontsize=8)
-        axis.set_ylabel("Correlation amplitude", fontsize=8)
+        axis.set_ylabel("Correlation phase [deg]", fontsize=8)
+        axis.set_ylim(-180.0, 180.0)
         axis.grid(alpha=0.35)
 
     for axis in axes.flat[len(partners) :]:
@@ -136,27 +140,23 @@ def plot_global_matrix(
     polarizations: int,
     output_path: Path,
 ) -> np.ndarray:
-    """Plot a compact all-pairs summary using mean magnitude over frequency."""
+    """Plot a compact all-pairs summary using phase of mean visibility."""
     matrix = np.empty((len(selected), len(selected)), dtype=np.float64)
     for row, element_a in enumerate(selected):
         for column, element_b in enumerate(selected):
             visibility = extract_visibility(correlation, element_a, element_b, polarizations)
-            matrix[row, column] = np.mean(np.abs(visibility), dtype=np.float64)
-
-    finite_positive = matrix[np.isfinite(matrix) & (matrix > 0)]
-    reference = np.max(finite_positive) if finite_positive.size else 1.0
-    matrix_db = 20.0 * np.log10(np.maximum(matrix, np.finfo(np.float64).tiny) / reference)
+            matrix[row, column] = np.degrees(np.angle(np.mean(visibility)))
 
     figure_size = max(7.0, 0.42 * len(selected))
     figure, axis = plt.subplots(figsize=(figure_size, figure_size))
-    image = axis.imshow(matrix_db, origin="lower", aspect="equal", cmap="viridis", vmin=-60.0, vmax=0.0)
+    image = axis.imshow(matrix, origin="lower", aspect="equal", cmap="twilight", vmin=-180.0, vmax=180.0)
     axis.set_xticks(range(len(selected)), selected, rotation=90)
     axis.set_yticks(range(len(selected)), selected)
     axis.set_xlabel("Input element b")
     axis.set_ylabel("Input element a")
-    axis.set_title("Mean |V[a,b]| over frequency (dB relative to selected maximum)")
+    axis.set_title("Phase of mean V[a,b] over frequency")
     colorbar = figure.colorbar(image, ax=axis, shrink=0.85)
-    colorbar.set_label("dB rel. max")
+    colorbar.set_label("Phase [deg]")
     figure.tight_layout()
     figure.savefig(output_path, dpi=200)
     plt.close(figure)
@@ -177,7 +177,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=Path, required=True, help="Directory containing raw correlation files")
     parser.add_argument("--output-dir", type=Path, required=True, help="Directory for PNG and NPZ output")
     parser.add_argument("--pattern", default="correlation_0_*.bin", help="Glob for rawFileWrite correlation files")
-    parser.add_argument("--file-count", type=int, default=5, help="Frames to average; 0 means all matching files")
+    parser.add_argument("--file-count", type=int, default=5, help="Files to integrate; 0 means all matching files")
     parser.add_argument("--file-position", choices=("first", "last"), default="last")
     parser.add_argument("--antennas", default="all", help="Input elements: all, 0,2,4, or 0-7,16-23")
     parser.add_argument("--channels", type=int, default=DEFAULT_CHANNELS)
@@ -219,13 +219,13 @@ def main() -> None:
         print(f"Saved {output_path}")
 
     matrix_path = args.output_dir / "correlations_selected_matrix.png"
-    mean_magnitude = plot_global_matrix(average, selected, args.polarizations, matrix_path)
+    mean_phase_degrees = plot_global_matrix(average, selected, args.polarizations, matrix_path)
     npz_path = args.output_dir / "correlations_selected.npz"
     np.savez(
         npz_path,
         selected_elements=np.asarray(selected, dtype=np.int16),
         frequency_mhz=frequencies_mhz,
-        mean_magnitude=mean_magnitude,
+        mean_phase_degrees=mean_phase_degrees,
         averaged_files=np.asarray([str(path) for path in files]),
     )
     print(f"Saved {matrix_path}")

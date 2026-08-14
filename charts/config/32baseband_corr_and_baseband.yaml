@@ -1,8 +1,9 @@
 type: config
 log_level: INFO
 buffer_depth: 30  #max 1500 (RAM limit) (its important that if we are using GPU, this depth also affect to the VRAM)
+gpu_buffer_depth: 6
 
-samples_per_data_set: 15360 # 49.920ms (MUST BE DIVISIBLE BY 32)
+samples_per_data_set: 153600 # (MUST BE DIVISIBLE BY 32)
 cpu_affinity: [0,1]
 num_elements: 32 #antennas x pol
 num_local_freq: 672 #Number of frequencies per data stream sent to each node.
@@ -53,11 +54,12 @@ dpdk:
   max_rx_pkt_len: 9000
   num_mbufs: 9600
   handlers:
-    - dpdk_handler: rfsocHandler 
+    - dpdk_handler: rfsocHandlerNoClk 
       out_buffer: network_capture_buf
       alignment: 4000
       mask_buf: mask_buffer_zeros
-      capture_n_frames: 6500
+      capture_n_frames: 100
+    - dpdk_handler: none
 
 zero_samples:
  kotekan_stage: zeroSamples
@@ -88,6 +90,7 @@ gpu:
     gpu_0:
       kotekan_stage: cudaProcess
       gpu_id: 0 
+      buffer_depth: 6
       commands: *command_list
       in_buffers: 
         host_voltage: network_capture_buf
@@ -127,11 +130,11 @@ inspect_frame2:
 #   exit_after_n_files: 15
 
 
-# raw_file_write2:
-#   kotekan_stage: rawFileWrite
-#   in_buf: host_correlation_buffer
-#   file_name: host_correlation
-#   base_dir: /data/corr/host_corr3
-#   file_ext: bin
-#   num_frames_per_file: 1
-#   exit_after_n_files: 6500
+raw_file_write2:
+  kotekan_stage: rawFileWrite
+  in_buf: host_correlation_buffer
+  file_name: host_correlation
+  base_dir: /data/corr/test
+  file_ext: bin
+  num_frames_per_file: 1
+  exit_after_n_files: 100
