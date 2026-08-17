@@ -45,7 +45,6 @@ cudaCorrelatorAstron::cudaCorrelatorAstron(Config& config, const std::string& un
     if (inst == 0) {
         std::vector<std::string> opts = {
             "-arch=compute_86",
-            "-std=c++17",
             "-lineinfo",
             "-DNR_BITS=4",
             fmt::format("-DNR_RECEIVERS={:d}", _num_elements / 2),
