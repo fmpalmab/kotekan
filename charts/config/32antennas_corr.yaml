@@ -4,6 +4,8 @@ buffer_depth: 30  #max 1500 (RAM limit) (its important that if we are using GPU,
 gpu_buffer_depth: 6
 
 samples_per_data_set: 153600 # (MUST BE DIVISIBLE BY 32)
+integration_frames: 20 # 10.24 s per accumulated output frame
+capture_n_frames: 45000
 cpu_affinity: [0,1]
 num_elements: 32 #antennas x pol
 num_local_freq: 672 #Number of frequencies per data stream sent to each node.
@@ -44,6 +46,13 @@ host_correlation_buffer:
     metadata_pool: main_pool
 
 
+integrated_correlation_buffer:
+    kotekan_buffer: standard
+    num_frames: buffer_depth
+    frame_size: num_local_freq * num_blocks * (block_size*block_size) * 2 * num_data_sets * sizeof_int 
+    metadata_pool: main_pool
+
+
 # DPDK Stage to capture network packets
 dpdk:
   kotekan_stage: dpdkCore
@@ -58,7 +67,6 @@ dpdk:
       out_buffer: network_capture_buf
       alignment: 4000
       mask_buf: mask_buffer_zeros
-      capture_n_frames: 100
     - dpdk_handler: none
 
 zero_samples:
@@ -69,7 +77,7 @@ zero_samples:
  sample_size: 21504 #antennas x num_local_freq
 
 gpu:
-    profiling: false
+    profiling: true
     kernel_path: "lib/cuda/kernels"
     commands: &command_list
     - name: cudaInputData
@@ -96,7 +104,7 @@ gpu:
         host_voltage: network_capture_buf
       out_buffers:
         host_correlation: host_correlation_buffer
-      
+
 
 #Monitoring stages 
 # inspect_frame:
@@ -105,13 +113,19 @@ gpu:
 
 inspect_frame2:
   kotekan_stage: restInspectFrame
+  in_buf: integrated_correlation_buffer
+
+charts_accumulate:
+  kotekan_stage: chartsAccumulate
   in_buf: host_correlation_buffer
+  out_buf: integrated_correlation_buffer
+  num_frames_to_accumulate: integration_frames
 
 raw_file_write2:
   kotekan_stage: rawFileWrite
-  in_buf: host_correlation_buffer
+  in_buf: integrated_correlation_buffer
   file_name: host_correlation
-  base_dir: /data/corr/test
+  base_dir: /data/corr/corr_6h_1808
   file_ext: bin
   num_frames_per_file: 1
-  exit_after_n_files: 100
+  #exit_after_n_files: capture_n_frames / integration_frames

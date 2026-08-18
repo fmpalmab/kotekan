@@ -21,7 +21,7 @@ bytes_per_dataset: n_channels_per_packet * packets_per_spectrum * spectra_per_da
 
 # For basebandReadout
 samples_per_data_set: 15360 
-capture_n_frames: 30 
+capture_n_frames: 20 
 
 
 ###########################
