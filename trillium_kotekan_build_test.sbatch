@@ -16,6 +16,10 @@ module load cuda/12.6 2>/dev/null || module load cuda || true
 module load cmake 2>/dev/null || true
 module load boost 2>/dev/null || true
 
+# Prepend GCC 12 libstdc++ path for runtime execution
+GCC_LIB_DIR="$(dirname $(gcc -print-file-name=libstdc++.so.6))"
+export LD_LIBRARY_PATH="${GCC_LIB_DIR}:${LD_LIBRARY_PATH:-}"
+
 echo "=== Loaded Compilers ==="
 gcc --version | head -n 1
 which nvcc && nvcc --version | tail -n 2
@@ -29,7 +33,7 @@ rm -rf build
 mkdir -p build
 cd build
 
-# Configure CMake with CUDA and NUMA enabled (building for Hopper sm_90)
+# Configure CMake with CUDA, NUMA, and Hopper sm_90
 cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="90" -DUSE_NUMA=ON -DWERROR=OFF
 
 # Compile Kotekan using available CPU cores
@@ -39,7 +43,7 @@ cd ..
 echo "========================================="
 echo " 2. Building Standalone CUDA Benchmark"
 echo "========================================="
-# Compiles directly for the host GPU node with fast math and all include directories
+# Compiles directly for the host GPU node with fast math, include directories, and logging symbols
 nvcc -std=c++17 -O3 --use_fast_math \
     -arch=native \
     -Xptxas -O3 \
@@ -54,6 +58,8 @@ nvcc -std=c++17 -O3 --use_fast_math \
     -I external/gputils/src_include \
     test_charts/benchmark_kotekan_cuda_tracker_v5.cpp \
     lib/cuda/cudaBeamTrackerV5.cu \
+    lib/core/kotekanLogging.cpp \
+    lib/core/errors.c \
     -o benchmark_tracker
 
 echo "========================================="
