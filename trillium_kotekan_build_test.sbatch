@@ -15,6 +15,7 @@ module load StdEnv/2023 2>/dev/null || true
 module load gcc/12.3 2>/dev/null || module load gcc || true
 module load cuda/12.6 2>/dev/null || module load cuda || true
 module load cmake 2>/dev/null || true
+module load boost 2>/dev/null || true
 
 echo "=== Loaded Compilers ==="
 gcc --version | head -n 1
@@ -43,7 +44,7 @@ echo "========================================="
 nvcc -std=c++17 -O3 --use_fast_math \
     -arch=native \
     -Xptxas -O3 \
-    -I lib/cuda -I lib/core -I lib/ \
+    -I lib/cuda -I lib/metadata -I lib/core -I lib/utils -I lib/ \
     test_charts/benchmark_kotekan_cuda_tracker_v5.cpp \
     lib/cuda/cudaBeamTrackerV5.cu \
     -o benchmark_tracker
@@ -56,5 +57,4 @@ echo "========================================="
 echo "========================================="
 echo " 4. Running Full Kotekan Pipeline Test"
 echo "========================================="
-# Run the pipeline test yaml configuration
 ./build/kotekan/kotekan --config test_charts/config/64antennas_beam_tracker_test.yaml
