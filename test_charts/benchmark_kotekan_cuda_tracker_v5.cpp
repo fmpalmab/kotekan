@@ -52,11 +52,12 @@ void cpu_reference_beam_tracker(
 
     for (std::size_t t = 0; t < n_time; ++t) {
         const std::size_t win = t / config.integration_spectra;
-        const std::size_t win_sample = win * config.integration_spectra;
-        const float l = config.trajectory.direction_start.x
-                        + static_cast<float>(win_sample) * config.trajectory.direction_rate_per_sample.dl;
-        const float m = config.trajectory.direction_start.y
-                        + static_cast<float>(win_sample) * config.trajectory.direction_rate_per_sample.dm;
+        const double center_sample =
+            (static_cast<double>(win) + 0.5) * static_cast<double>(config.integration_spectra);
+        const float l = static_cast<float>(config.trajectory.direction_start.x
+                        + center_sample * config.trajectory.direction_rate_per_sample.dl);
+        const float m = static_cast<float>(config.trajectory.direction_start.y
+                        + center_sample * config.trajectory.direction_rate_per_sample.dm);
         const float trans_sq = l * l + m * m;
         const float n = (trans_sq <= 1.0f) ? std::sqrt(1.0f - trans_sq) : 0.0f;
         (void)n;

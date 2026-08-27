@@ -16,10 +16,6 @@ module load cuda/12.6 2>/dev/null || module load cuda || true
 module load cmake 2>/dev/null || true
 module load boost 2>/dev/null || true
 
-# Prepend GCC 12 libstdc++ path for runtime execution
-GCC_LIB_DIR="$(dirname $(gcc -print-file-name=libstdc++.so.6))"
-export LD_LIBRARY_PATH="${GCC_LIB_DIR}:${LD_LIBRARY_PATH:-}"
-
 echo "=== Loaded Compilers ==="
 gcc --version | head -n 1
 which nvcc && nvcc --version | tail -n 2
@@ -71,4 +67,12 @@ echo "========================================="
 echo " 4. Running Full Kotekan Pipeline Test"
 echo "========================================="
 mkdir -p /tmp/test_charts_tracker
-./build/kotekan/kotekan --config test_charts/config/64antennas_beam_tracker_test.yaml
+
+# Execute using CVMFS dynamic linker to ensure Gentoo/GCC 12 runtime libraries are used
+if [[ -f "/cvmfs/soft.computecanada.ca/gentoo/2023/x86-64-v3/lib64/ld-linux-x86-64.so.2" ]]; then
+    /cvmfs/soft.computecanada.ca/gentoo/2023/x86-64-v3/lib64/ld-linux-x86-64.so.2 \
+        --library-path "/cvmfs/soft.computecanada.ca/gentoo/2023/x86-64-v3/usr/lib64:/cvmfs/soft.computecanada.ca/gentoo/2023/x86-64-v3/lib64:${EBROOTCUDA}/lib64" \
+        ./build/kotekan/kotekan --config test_charts/config/64antennas_beam_tracker_test.yaml
+else
+    ./build/kotekan/kotekan --config test_charts/config/64antennas_beam_tracker_test.yaml
+fi
