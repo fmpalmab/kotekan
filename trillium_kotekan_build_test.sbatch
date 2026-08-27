@@ -10,22 +10,27 @@
 echo "========================================="
 echo " Loading Trillium Modules"
 echo "========================================="
-# Kotekan requires C++17 (GCC 9+ or 11+) and recent CUDA
-# Adjust these module names based on what is available on Trillium (`module avail gcc cuda`)
-module purge
-module load gcc/11.3.0       # Or gcc/12, whatever is standard non-LTS for C++17
-module load cuda/13.3        # Recent CUDA
-module load cmake/3.24.2     # CMake > 3.8.2 required
+# Trillium (Compute Canada Lmod) environment
+module load StdEnv/2023 2>/dev/null || true
+module load gcc/12.3 2>/dev/null || module load gcc || true
+module load cuda/12.6 2>/dev/null || module load cuda || true
+module load cmake 2>/dev/null || true
+
+echo "=== Loaded Compilers ==="
+gcc --version | head -n 1
+which nvcc && nvcc --version | tail -n 2
+cmake --version | head -n 1
 
 echo "========================================="
 echo " 1. Building Kotekan Framework"
 echo "========================================="
-# We build Kotekan out-of-source in a build directory
+# Clean old failed CMake cache
+rm -rf build
 mkdir -p build
 cd build
 
-# Configure CMake with CUDA, H100/Blackwell architectures, and NUMA enabled
-cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="90;120" -DUSE_NUMA=ON -DWERROR=OFF
+# Configure CMake with CUDA and NUMA enabled
+cmake .. -DUSE_CUDA=ON -DUSE_NUMA=ON -DWERROR=OFF
 
 # Compile Kotekan using available CPU cores
 make -j${SLURM_CPUS_PER_TASK}
@@ -34,12 +39,9 @@ cd ..
 echo "========================================="
 echo " 2. Building Standalone CUDA Benchmark"
 echo "========================================="
-# The benchmark cpp includes kotekan headers, so we link it with the V5 cuda source
-# Compiles dual-architecture fatbinary: Hopper (H100) + Blackwell (RTX 5090)
+# Compiles directly for the host GPU node with fast math
 nvcc -std=c++17 -O3 --use_fast_math \
-    -gencode arch=compute_90,code=sm_90 \
-    -gencode arch=compute_120,code=sm_120 \
-    -gencode arch=compute_120,code=compute_120 \
+    -arch=native \
     -Xptxas -O3 \
     -I lib/cuda -I lib/core -I lib/ \
     test_charts/benchmark_kotekan_cuda_tracker_v5.cpp \
