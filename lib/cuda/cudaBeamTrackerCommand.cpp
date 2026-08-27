@@ -62,6 +62,15 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
         _shared_config.time_unroll = static_cast<std::size_t>(config.get_default<int>(unique_name, "time_unroll", 8));
         _shared_config.enable_cuda_graph = config.get_default<bool>(unique_name, "enable_cuda_graph", false);
 
+        // Load pre-configured bad / dead antenna elements if specified in YAML
+        auto bad_elements = config.get_default<std::vector<int>>(unique_name, "bad_elements", {});
+        for (int elem : bad_elements) {
+            if (elem >= 0 && elem < _num_elements && elem < static_cast<int>(MAX_TRACKER_ANTENNAS)) {
+                _shared_config.antenna_mask[elem] = 0;
+                INFO_NON_OO("Beam Tracker: Initialized bad antenna element {:d} (masked/disabled).", elem);
+            }
+        }
+
         // Register Dynamic REST Endpoints once
         if (!_endpoints_registered) {
             auto& rest = restServer::instance();
@@ -106,14 +115,76 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
                 }
             });
 
-            // 3. Status Query
-            rest.register_get_callback("/beam_tracker/status", [](connectionInstance& conn) {
+            // 3. Mask / Unmask Antenna (Fault-tolerance for dead/failing antennas)
+            rest.register_post_callback("/beam_tracker/mask_antenna", [](connectionInstance& conn, nlohmann::json& j) {
+                try {
+                    if (!j.contains("antenna_id")) {
+                        conn.send_error("Missing antenna_id in request", HTTP_RESPONSE::BAD_REQUEST);
+                        return;
+                    }
+                    std::size_t ant_id = j["antenna_id"];
+                    if (ant_id >= MAX_TRACKER_ANTENNAS) {
+                        conn.send_error("antenna_id exceeds MAX_TRACKER_ANTENNAS", HTTP_RESPONSE::BAD_REQUEST);
+                        return;
+                    }
+                    bool enabled = j.value("enabled", false);
+
+                    std::lock_guard<std::mutex> lk(_global_mutex);
+                    _shared_config.antenna_mask[ant_id] = enabled ? 1 : 0;
+                    INFO_NON_OO("Beam Tracker: Antenna {:d} set to {:s}", ant_id, enabled ? "ACTIVE" : "DEAD/MASKED");
+                    conn.send_text_reply(fmt::format("Antenna {:d} set to {:s}\n", ant_id, enabled ? "ACTIVE" : "DEAD/MASKED"));
+                } catch (const std::exception& e) {
+                    conn.send_error(e.what(), HTTP_RESPONSE::BAD_REQUEST);
+                }
+            });
+
+            // 4. Batch Mask Antennas
+            rest.register_post_callback("/beam_tracker/set_antenna_mask", [](connectionInstance& conn, nlohmann::json& j) {
+                try {
+                    std::lock_guard<std::mutex> lk(_global_mutex);
+                    if (j.contains("bad_elements")) {
+                        for (int elem : j["bad_elements"]) {
+                            if (elem >= 0 && elem < static_cast<int>(MAX_TRACKER_ANTENNAS)) {
+                                _shared_config.antenna_mask[elem] = 0;
+                            }
+                        }
+                    }
+                    if (j.contains("active_elements")) {
+                        _shared_config.antenna_mask.fill(0);
+                        for (int elem : j["active_elements"]) {
+                            if (elem >= 0 && elem < static_cast<int>(MAX_TRACKER_ANTENNAS)) {
+                                _shared_config.antenna_mask[elem] = 1;
+                            }
+                        }
+                    }
+                    INFO_NON_OO("Beam Tracker: Updated antenna mask configuration.");
+                    conn.send_text_reply("Antenna mask configuration updated\n");
+                } catch (const std::exception& e) {
+                    conn.send_error(e.what(), HTTP_RESPONSE::BAD_REQUEST);
+                }
+            });
+
+            // 5. Status Query
+            rest.register_get_callback("/beam_tracker/status", [this](connectionInstance& conn) {
                 nlohmann::json reply;
                 std::lock_guard<std::mutex> lk(_global_mutex);
                 reply["num_active_beams"] = _shared_config.num_active_beams;
                 reply["max_beams_capacity"] = MAX_TRACKER_BEAMS;
                 reply["integration_spectra"] = _shared_config.integration_spectra;
                 reply["spacing_m"] = _shared_config.spacing_m;
+                reply["total_elements"] = _num_elements;
+
+                std::size_t active_ant_count = 0;
+                nlohmann::json bad_elems = nlohmann::json::array();
+                for (int a = 0; a < _num_elements; ++a) {
+                    if (_shared_config.antenna_mask[a] != 0) {
+                        active_ant_count++;
+                    } else {
+                        bad_elems.push_back(a);
+                    }
+                }
+                reply["num_active_antennas"] = active_ant_count;
+                reply["bad_elements"] = bad_elems;
 
                 reply["beams"] = nlohmann::json::array();
                 for (std::size_t b = 0; b < _shared_config.num_active_beams; ++b) {

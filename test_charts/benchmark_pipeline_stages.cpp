@@ -2,11 +2,6 @@
 #include "DataType.hpp"
 #include "kotekanLogging.hpp"
 
-namespace kotekan {
-void kotekanLogging::vinternal_logging(int, fmt::basic_string_view<char>, const fmt::basic_string_view<char>, fmt::format_args) {}
-void kotekanLogging::vset_error_message(const fmt::basic_string_view<char>, fmt::format_args) {}
-}
-
 #include <cuda_runtime.h>
 #include <chrono>
 #include <cmath>
@@ -73,7 +68,8 @@ StageTiming compute_stats(std::vector<double>& times) {
 
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int /*argc*/, char** /*argv*/) {
+    (void)emulate_rfsoc_shuffle_frame;
     std::cout << "===================================================================================================\n";
     std::cout << " CHARTS Dynamic Multi-Beam Pipeline Latency Benchmark & Live Control Verification\n";
     std::cout << "===================================================================================================\n\n";

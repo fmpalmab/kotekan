@@ -13,6 +13,7 @@
 namespace kotekan {
 
 constexpr std::size_t MAX_TRACKER_BEAMS = 8;
+constexpr std::size_t MAX_TRACKER_ANTENNAS = 256;
 
 // 3D vector for directions
 struct Direction3D {
@@ -41,6 +42,8 @@ struct BeamTrackerConfig {
     std::size_t time_chunk_size = 80;
     std::size_t time_unroll = 8; // 2, 4, or 8
     bool enable_cuda_graph = false;
+    std::array<uint8_t, MAX_TRACKER_ANTENNAS> antenna_mask;
+    BeamTrackerConfig() { antenna_mask.fill(1); }
 };
 
 // Multi-beam configuration supporting dynamic active slot counts
@@ -52,6 +55,8 @@ struct MultiBeamTrackerConfig {
     std::size_t time_chunk_size = 80;
     std::size_t time_unroll = 8;
     bool enable_cuda_graph = false;
+    std::array<uint8_t, MAX_TRACKER_ANTENNAS> antenna_mask;
+    MultiBeamTrackerConfig() { antenna_mask.fill(1); }
 };
 
 /**

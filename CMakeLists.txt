@@ -81,6 +81,7 @@ add_subdirectory(kotekan)
 add_subdirectory(scripts)
 add_subdirectory(external)
 add_subdirectory(config)
+add_subdirectory(test_charts)
 
 # Testing with boost
 if(${WITH_BOOST_TESTS})
