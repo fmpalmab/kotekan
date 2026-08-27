@@ -99,10 +99,10 @@ tracker_v5_multibeam_kernel(
     const std::size_t window = chunk_global / chunks_per_window;
 
     const std::size_t dir_idx = (window * num_active_beams + beam_idx) * 3;
-    const float3 direction = make_float3(window_directions[dir_idx + 0],
-                                         window_directions[dir_idx + 1],
-                                         window_directions[dir_idx + 2]);
-    const double wave_number = wavenumbers[freq];
+    const float3 direction = make_float3(__ldg(&window_directions[dir_idx + 0]),
+                                         __ldg(&window_directions[dir_idx + 1]),
+                                         __ldg(&window_directions[dir_idx + 2]));
+    const double wave_number = __ldg(&wavenumbers[freq]);
 
     // Precompute steering weights and pre-negated imaginary components
     float w_r[ANT_PER_LANE];
@@ -150,7 +150,7 @@ tracker_v5_multibeam_kernel(
 
             #pragma unroll
             for (int k = 0; k < TIME_UNROLL; ++k) {
-                const float2 p = unpack_int4_fast(packed_ptr[k * t_stride + a_offset]);
+                const float2 p = unpack_int4_fast(__ldg(&packed_ptr[k * t_stride + a_offset]));
                 s_r[k] = fmaf(wra, p.x, fmaf(nwi, p.y, s_r[k]));
                 s_i[k] = fmaf(wra, p.y, fmaf(wia, p.x, s_i[k]));
             }
@@ -184,7 +184,7 @@ tracker_v5_multibeam_kernel(
 
         #pragma unroll
         for (unsigned int a = 0; a < ANT_PER_LANE; ++a) {
-            const float2 p = unpack_int4_fast(packed_ptr[a * 32U]);
+            const float2 p = unpack_int4_fast(__ldg(&packed_ptr[a * 32U]));
             s_r = fmaf(w_r[a], p.x, fmaf(nw_i[a], p.y, s_r));
             s_i = fmaf(w_r[a], p.y, fmaf(w_i[a], p.x, s_i));
         }
