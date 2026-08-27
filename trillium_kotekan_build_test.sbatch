@@ -69,4 +69,5 @@ echo "========================================="
 mkdir -p /tmp/test_charts_tracker
 
 # Execute Kotekan (CVMFS compiler module handles runtime library paths)
-./build/kotekan/kotekan --config test_charts/config/64antennas_beam_tracker_test.yaml
+# We add build/external/n2k to LD_LIBRARY_PATH because CMAKE_SKIP_RPATH removed it
+LD_LIBRARY_PATH="$PWD/build/external/n2k:$LD_LIBRARY_PATH" ./build/kotekan/kotekan --config test_charts/config/64antennas_beam_tracker_test.yaml
