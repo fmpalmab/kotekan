@@ -1,6 +1,8 @@
 project(kotekan_cuda)
 
-set(CMAKE_CUDA_ARCHITECTURES 61 86)
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR "${CMAKE_CUDA_ARCHITECTURES}" STREQUAL "")
+    set(CMAKE_CUDA_ARCHITECTURES 61 86 90)
+endif()
 
 add_library(
     kotekan_cuda
