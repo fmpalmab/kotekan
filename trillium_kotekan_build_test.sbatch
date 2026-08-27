@@ -30,7 +30,7 @@ mkdir -p build
 cd build
 
 # Configure CMake with CUDA, NUMA, and Hopper sm_90
-cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="90" -DUSE_NUMA=ON -DWERROR=OFF
+cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="90" -DUSE_NUMA=ON -DWERROR=OFF -DCMAKE_SKIP_RPATH=TRUE
 
 # Compile Kotekan using available CPU cores
 make -j${SLURM_CPUS_PER_TASK}
@@ -68,11 +68,5 @@ echo " 4. Running Full Kotekan Pipeline Test"
 echo "========================================="
 mkdir -p /tmp/test_charts_tracker
 
-# Execute using CVMFS dynamic linker to ensure Gentoo/GCC 12 runtime libraries are used
-if [[ -f "/cvmfs/soft.computecanada.ca/gentoo/2023/x86-64-v3/lib64/ld-linux-x86-64.so.2" ]]; then
-    /cvmfs/soft.computecanada.ca/gentoo/2023/x86-64-v3/lib64/ld-linux-x86-64.so.2 \
-        --library-path "/cvmfs/soft.computecanada.ca/gentoo/2023/x86-64-v3/usr/lib64:/cvmfs/soft.computecanada.ca/gentoo/2023/x86-64-v3/lib64:${EBROOTCUDA}/lib64" \
-        ./build/kotekan/kotekan --config test_charts/config/64antennas_beam_tracker_test.yaml
-else
-    ./build/kotekan/kotekan --config test_charts/config/64antennas_beam_tracker_test.yaml
-fi
+# Execute Kotekan (CVMFS compiler module handles runtime library paths)
+./build/kotekan/kotekan --config test_charts/config/64antennas_beam_tracker_test.yaml
