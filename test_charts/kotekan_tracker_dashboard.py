@@ -38,6 +38,11 @@ from constants import (
     DEFAULT_SPACING_M,
 )
 from kotekan_tracker_control import KotekanTrackerClient
+from plot_beam_patterns_and_outputs import (
+    compute_array_factor_2d,
+    compute_beam_cuts,
+    get_antenna_positions,
+)
 
 # Catalog of primary astronomical radio sources
 ASTRONOMICAL_TARGETS = {
@@ -144,6 +149,7 @@ def create_app(rest_host: str = "127.0.0.1", rest_port: int = 12048) -> dash.Das
                                         dcc.Input(id="mask-ant-input", type="number", min=0, max=255, value=0, style={"width": "70px", "backgroundColor": "#0D1117", "color": "#FFF", "border": "1px solid #30363D", "padding": "4px 8px", "borderRadius": "4px"}),
                                         html.Button("Disable (Mask)", id="btn-mask-ant", style={"backgroundColor": "#DA3633", "color": "#FFF", "border": "none", "padding": "6px 12px", "borderRadius": "4px", "cursor": "pointer", "fontSize": "12px", "fontWeight": "bold"}),
                                         html.Button("Enable (Unmask)", id="btn-unmask-ant", style={"backgroundColor": "#238636", "color": "#FFF", "border": "none", "padding": "6px 12px", "borderRadius": "4px", "cursor": "pointer", "fontSize": "12px", "fontWeight": "bold"}),
+                                        html.Button("⚡ Auto-Mask Dead", id="btn-auto-mask", style={"backgroundColor": "#8957E5", "color": "#FFF", "border": "none", "padding": "6px 12px", "borderRadius": "4px", "cursor": "pointer", "fontSize": "12px", "fontWeight": "bold"}),
                                         html.Span(id="mask-action-feedback", style={"fontSize": "12px", "color": "#3FB950", "marginLeft": "auto"}),
                                     ],
                                 ),
@@ -315,6 +321,33 @@ def create_app(rest_host: str = "127.0.0.1", rest_port: int = 12048) -> dash.Das
                 ],
             ),
 
+            # Bottom Full-Width Section: Synthesized Beampattern & Sidelobe Hierarchy
+            html.Div(
+                style={
+                    "backgroundColor": "#161B22",
+                    "border": "1px solid #30363D",
+                    "borderRadius": "8px",
+                    "padding": "16px",
+                    "marginTop": "20px",
+                },
+                children=[
+                    html.Div(
+                        style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "12px"},
+                        children=[
+                            html.H3("Live Synthesized Beampattern, Main Lobe & Sidelobe Hierarchy", style={"margin": "0", "fontSize": "16px", "color": "#FFFFFF"}),
+                            html.Span("Physical Array Factor & Sidelobe Profiles | -3 dB HPBW & -13 dB Levels", style={"fontSize": "12px", "color": "#8B949E"}),
+                        ],
+                    ),
+                    html.Div(
+                        style={"display": "grid", "gridTemplateColumns": "1.2fr 1fr", "gap": "16px"},
+                        children=[
+                            dcc.Graph(id="live-beampattern-2d", config={"displayModeBar": False}, style={"height": "360px"}),
+                            dcc.Graph(id="live-beampattern-cuts", config={"displayModeBar": False}, style={"height": "360px"}),
+                        ],
+                    ),
+                ],
+            ),
+
             # Auto Refresh Timer (1 Second interval)
             dcc.Interval(id="telemetry-interval", interval=1000, n_intervals=0),
         ],
@@ -378,14 +411,21 @@ def create_app(rest_host: str = "127.0.0.1", rest_port: int = 12048) -> dash.Das
         Output("mask-action-feedback", "children"),
         Input("btn-mask-ant", "n_clicks"),
         Input("btn-unmask-ant", "n_clicks"),
+        Input("btn-auto-mask", "n_clicks"),
         State("mask-ant-input", "value"),
         prevent_initial_call=True,
     )
-    def handle_antenna_masking(mask_clicks, unmask_clicks, ant_id):
+    def handle_antenna_masking(mask_clicks, unmask_clicks, auto_clicks, ant_id):
         triggered_id = ctx.triggered_id
-        if not triggered_id or ant_id is None:
+        if not triggered_id:
             return ""
         try:
+            if triggered_id == "btn-auto-mask":
+                h5_file = "/home/fernando/charts/data/260816T013722Z_CHARTS_hdf5/baseband_virtual.h5"
+                msg = client.auto_mask(h5_path=h5_file)
+                return "⚡ Auto-Mask applied (dead lines isolated)"
+            if ant_id is None:
+                return ""
             enable = (triggered_id == "btn-unmask-ant")
             msg = client.mask_antenna(int(ant_id), enabled=enable)
             state_str = "UNMASKED (ACTIVE)" if enable else "MASKED (DEAD)"
@@ -412,6 +452,8 @@ def create_app(rest_host: str = "127.0.0.1", rest_port: int = 12048) -> dash.Das
         Output("antenna-grid-graph", "figure"),
         Output("antenna-summary-text", "children"),
         Output("active-beams-table", "children"),
+        Output("live-beampattern-2d", "figure"),
+        Output("live-beampattern-cuts", "figure"),
         Input("telemetry-interval", "n_intervals"),
     )
     def update_live_telemetry(n_intervals):
@@ -453,12 +495,10 @@ def create_app(rest_host: str = "127.0.0.1", rest_port: int = 12048) -> dash.Das
 
         # 2. Live Topocentric Sky Map Figure
         fig_sky = go.Figure()
-        # Horizon & Elevation Contours
         theta = np.linspace(0, 2 * np.pi, 200)
         fig_sky.add_trace(go.Scatter(x=np.sin(theta), y=np.cos(theta), mode="lines", line=dict(color="#8B949E", dash="dash", width=1.5), name="Horizon (0°)", hoverinfo="none"))
         fig_sky.add_trace(go.Scatter(x=np.cos(np.radians(30)) * np.sin(theta), y=np.cos(np.radians(30)) * np.cos(theta), mode="lines", line=dict(color="#30363D", dash="dot", width=1), name="El 30°", hoverinfo="none"))
         fig_sky.add_trace(go.Scatter(x=np.cos(np.radians(60)) * np.sin(theta), y=np.cos(np.radians(60)) * np.cos(theta), mode="lines", line=dict(color="#30363D", dash="dot", width=1), name="El 60°", hoverinfo="none"))
-        # Zenith
         fig_sky.add_trace(go.Scatter(x=[0], y=[0], mode="markers+text", marker=dict(color="#FFEE58", symbol="cross", size=12), text=["Zenith"], textposition="top center", name="Zenith (n=1.0)"))
 
         # Astronomical Source Overlays
@@ -471,7 +511,7 @@ def create_app(rest_host: str = "127.0.0.1", rest_port: int = 12048) -> dash.Das
             l = -math.cos(dec_rad) * math.sin(ha_rad)
             m = math.sin(dec_rad) * math.cos(lat_rad) - math.cos(dec_rad) * math.sin(lat_rad) * math.cos(ha_rad)
             n = math.sin(dec_rad) * math.sin(lat_rad) + math.cos(dec_rad) * math.cos(lat_rad) * math.cos(ha_rad)
-            if n > 0:  # above horizon
+            if n > 0:
                 short_n = name.split("(")[0].strip()
                 fig_sky.add_trace(go.Scatter(x=[l], y=[m], mode="markers+text", marker=dict(color=data["color"], symbol="circle-open", size=10, line=dict(width=2)), text=[short_n], textposition="bottom center", name=short_n))
 
@@ -511,10 +551,10 @@ def create_app(rest_host: str = "127.0.0.1", rest_port: int = 12048) -> dash.Das
                 elem_id = r * grid_dim + c
                 if elem_id < total_elements:
                     if elem_id in bad_elements:
-                        grid_matrix[r, c] = 0  # Masked
+                        grid_matrix[r, c] = 0
                         row_text.append(f"Ant #{elem_id}: MASKED (DEAD)")
                     else:
-                        grid_matrix[r, c] = 1  # Active
+                        grid_matrix[r, c] = 1
                         row_text.append(f"Ant #{elem_id}: ACTIVE (ALIVE)")
                 else:
                     grid_matrix[r, c] = 0.5
@@ -576,7 +616,60 @@ def create_app(rest_host: str = "127.0.0.1", rest_port: int = 12048) -> dash.Das
             ],
         )
 
-        return badges, fig_sky, fig_ant, ant_summary, table
+        # 5. Live 2D Beampattern Contour & Sidelobes
+        mask_arr = np.ones(total_elements, dtype=np.uint8)
+        for bad_id in bad_elements:
+            if 0 <= bad_id < total_elements:
+                mask_arr[bad_id] = 0
+
+        target_b0 = trajectories[0] if trajectories else {}
+        b0_l0 = target_b0.get("l0", target_b0.get("source_l0", 0.05))
+        b0_m0 = target_b0.get("m0", target_b0.get("source_m0", -0.02))
+
+        ant_pos = get_antenna_positions(total_elements, DEFAULT_SPACING_M)
+        L_g, M_g, P_dB = compute_array_factor_2d(ant_pos, mask_arr, 400.0 * 1e6, b0_l0, b0_m0, grid_res=120)
+
+        fig_beam_2d = go.Figure(data=go.Contour(
+            x=L_g[0, :], y=M_g[:, 0], z=P_dB,
+            colorscale="Plasma",
+            contours=dict(start=-35, end=0, size=2.5, showlines=True),
+            colorbar=dict(title="dB", titleside="right", thickness=12, len=0.9),
+            hoverinfo="x+y+z",
+        ))
+        fig_beam_2d.add_trace(go.Scatter(
+            x=[b0_l0], y=[b0_m0], mode="markers",
+            marker=dict(symbol="cross", size=12, color="#00FFCC", line=dict(width=2)),
+            name="Main Beam Peak", hoverinfo="name"
+        ))
+        fig_beam_2d.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#161B22",
+            plot_bgcolor="#161B22",
+            margin=dict(l=10, r=10, t=20, b=20),
+            xaxis=dict(title="Direction Cosine l (East)", range=[-1.05, 1.05], zeroline=False),
+            yaxis=dict(title="Direction Cosine m (North)", range=[-1.05, 1.05], zeroline=False, scaleanchor="x", scaleratio=1),
+            showlegend=False,
+        )
+
+        # 6. Sidelobe Cross-Section Cuts
+        l_c, P_ew, m_c, P_ns = compute_beam_cuts(ant_pos, mask_arr, 400.0 * 1e6, b0_l0, b0_m0, n_pts=200)
+        fig_cuts = go.Figure()
+        fig_cuts.add_trace(go.Scatter(x=l_c, y=P_ew, mode="lines", line=dict(color="#00FFCC", width=2), name="East-West Cut (l)"))
+        fig_cuts.add_trace(go.Scatter(x=m_c, y=P_ns, mode="lines", line=dict(color="#FF7043", width=2, dash="dot"), name="North-South Cut (m)"))
+        fig_cuts.add_trace(go.Scatter(x=[-1.0, 1.0], y=[-3.0, -3.0], mode="lines", line=dict(color="#FFEE58", dash="dash", width=1), name="HPBW (-3 dB)"))
+        fig_cuts.add_trace(go.Scatter(x=[-1.0, 1.0], y=[-13.26, -13.26], mode="lines", line=dict(color="#FF5252", dash="dash", width=1), name="First Sidelobe (-13.2 dB)"))
+
+        fig_cuts.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="#161B22",
+            plot_bgcolor="#161B22",
+            margin=dict(l=10, r=10, t=20, b=20),
+            xaxis=dict(title="Direction Cosine Displacement", range=[-0.8, 0.8], gridcolor="#21262D"),
+            yaxis=dict(title="Normalized Power (dB)", range=[-38, 2], gridcolor="#21262D"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, font=dict(size=10)),
+        )
+
+        return badges, fig_sky, fig_ant, ant_summary, table, fig_beam_2d, fig_cuts
 
     return app
 

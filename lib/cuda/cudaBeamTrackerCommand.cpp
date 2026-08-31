@@ -237,7 +237,35 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
                 }
             });
 
-            // 6. Status Query
+            // 6. Auto-Mask Antennas (Automatic detection & masking)
+            rest.register_post_callback("/beam_tracker/auto_mask", [](connectionInstance& conn, nlohmann::json& j) {
+                try {
+                    std::lock_guard<std::mutex> lk(_global_mutex);
+                    std::size_t masked_count = 0;
+                    if (j.contains("bad_elements")) {
+                        for (int elem : j["bad_elements"]) {
+                            if (elem >= 0 && elem < static_cast<int>(MAX_TRACKER_ANTENNAS)) {
+                                _shared_config.antenna_mask[elem] = 0;
+                                masked_count++;
+                            }
+                        }
+                    }
+                    if (j.contains("active_elements")) {
+                        _shared_config.antenna_mask.fill(0);
+                        for (int elem : j["active_elements"]) {
+                            if (elem >= 0 && elem < static_cast<int>(MAX_TRACKER_ANTENNAS)) {
+                                _shared_config.antenna_mask[elem] = 1;
+                            }
+                        }
+                    }
+                    INFO_NON_OO("Beam Tracker: Auto-mask applied. {:d} bad antenna elements masked.", masked_count);
+                    conn.send_text_reply(fmt::format("Auto-mask applied successfully ({:d} elements masked)\n", masked_count));
+                } catch (const std::exception& e) {
+                    conn.send_error(e.what(), HTTP_RESPONSE::BAD_REQUEST);
+                }
+            });
+
+            // 7. Status Query
             rest.register_get_callback("/beam_tracker/status", [this](connectionInstance& conn) {
                 nlohmann::json reply;
                 std::lock_guard<std::mutex> lk(_global_mutex);

@@ -139,6 +139,34 @@ class KotekanTrackerClient:
             payload["active_elements"] = active_elements
         return self._post("/beam_tracker/set_antenna_mask", payload)
 
+    def auto_mask(self, h5_path: Optional[str] = None, power_threshold: float = 0.05) -> str:
+        """Automatically detects unplugged/dead antennas from baseband data and masks them."""
+        bad_elements = []
+        active_elements = []
+        if h5_path and os.path.exists(h5_path):
+            import h5py
+            with h5py.File(h5_path, "r") as f:
+                dset = f["baseband"]
+                raw = dset[:, :min(84, dset.shape[1]), :min(2048, dset.shape[2])]
+                r = (raw & 0x0F).astype(np.int8)
+                i = (raw >> 4).astype(np.int8)
+                r[r >= 8] -= 16
+                i[i >= 8] -= 16
+                c = r.astype(np.float32) + 1j * i.astype(np.float32)
+                powers = np.mean(np.abs(c) ** 2, axis=(1, 2))
+                for a in range(len(powers)):
+                    if powers[a] < power_threshold:
+                        bad_elements.append(int(a))
+                    else:
+                        active_elements.append(int(a))
+        else:
+            # Default auto-masking: activate channels 0..7, mask channels 8..63
+            active_elements = list(range(8))
+            bad_elements = list(range(8, 64))
+
+        payload = {"bad_elements": bad_elements, "active_elements": active_elements}
+        return self._post("/beam_tracker/auto_mask", payload)
+
 
 def render_ascii_skymap(trajectories: List[Dict[str, Any]], active_beams: int) -> str:
     """Render a 2D ASCII hemisphere sky map with beam positions."""
@@ -337,6 +365,11 @@ def main():
     p_ma.add_argument("--enable", action="store_true", default=True, help="Enable/unmask antenna")
     p_ma.add_argument("--disable", action="store_false", dest="enable", help="Disable/mask antenna")
 
+    # Auto-mask command
+    p_am = subparsers.add_parser("auto-mask", help="Automatically detect and mask dead/unplugged antennas")
+    p_am.add_argument("--h5-path", type=str, default="/home/fernando/charts/data/260816T013722Z_CHARTS_hdf5/baseband_virtual.h5", help="Path to baseband data")
+    p_am.add_argument("--threshold", type=float, default=0.05, help="Power threshold for dead antenna detection")
+
     # Watch command
     p_watch = subparsers.add_parser("watch", help="Watch status in live-updating dashboard")
     p_watch.add_argument("--interval", type=float, default=1.0, help="Update interval in seconds")
@@ -363,6 +396,9 @@ def main():
         print(f"Success: {resp}")
     elif args.command == "mask-antenna":
         resp = client.mask_antenna(args.id, args.enable)
+        print(f"Success: {resp}")
+    elif args.command == "auto-mask":
+        resp = client.auto_mask(args.h5_path, args.threshold)
         print(f"Success: {resp}")
     elif args.command == "watch":
         watch_loop(client, args.interval)
