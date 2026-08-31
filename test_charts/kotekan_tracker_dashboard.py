@@ -633,7 +633,7 @@ def create_app(rest_host: str = "127.0.0.1", rest_port: int = 12048) -> dash.Das
             x=L_g[0, :], y=M_g[:, 0], z=P_dB,
             colorscale="Plasma",
             contours=dict(start=-35, end=0, size=2.5, showlines=True),
-            colorbar=dict(title="dB", titleside="right", thickness=12, len=0.9),
+            colorbar=dict(title="dB", thickness=12, len=0.9),
             hoverinfo="x+y+z",
         ))
         fig_beam_2d.add_trace(go.Scatter(
