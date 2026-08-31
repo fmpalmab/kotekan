@@ -82,7 +82,7 @@ int main(int /*argc*/, char** /*argv*/) {
     const double real_time_budget_ms = 50.0;
 
     const std::size_t input_frame_bytes = n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t); // ~315 MB
-    const std::size_t output_frame_bytes = n_time * n_freq * max_beams * sizeof(float);        // ~78.75 MB
+    const std::size_t output_frame_bytes = n_time * n_freq * max_beams * sizeof(float2);       // ~157.5 MB
 
     std::cout << "Configuration Parameters:\n";
     std::cout << "  - Spectra per Frame (n_time)          : " << n_time << "\n";
@@ -99,12 +99,12 @@ int main(int /*argc*/, char** /*argv*/) {
 
     std::vector<uint8_t> fake_packet(168 * 32, 0x55);
     std::vector<uint8_t> host_voltage(input_frame_bytes, 0x11);
-    std::vector<float> host_intensity(n_time * n_freq * max_beams, 0.0f);
+    std::vector<float2> host_voltages(n_time * n_freq * max_beams);
 
     kotekan::int4x2_t* d_voltage = nullptr;
-    float* d_intensity = nullptr;
+    float2* d_voltages = nullptr;
     cudaMalloc(&d_voltage, input_frame_bytes);
-    cudaMalloc(&d_intensity, output_frame_bytes);
+    cudaMalloc(&d_voltages, output_frame_bytes);
 
     cudaStream_t stream;
     cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
@@ -140,14 +140,14 @@ int main(int /*argc*/, char** /*argv*/) {
         // Warmup
         for (int i = 0; i < 3; ++i) {
             kotekan::launch_beam_tracker_v5_multibeam(
-                d_voltage, d_intensity, n_time, n_freq, n_ant, max_beams, freqs, config, stream);
+                d_voltage, d_voltages, n_time, n_freq, n_ant, max_beams, freqs, config, stream);
             cudaStreamSynchronize(stream);
         }
 
         for (std::size_t iter = 0; iter < n_iterations; ++iter) {
             cudaEventRecord(kernel_start, stream);
             kotekan::launch_beam_tracker_v5_multibeam(
-                d_voltage, d_intensity, n_time, n_freq, n_ant, max_beams, freqs, config, stream);
+                d_voltage, d_voltages, n_time, n_freq, n_ant, max_beams, freqs, config, stream);
             cudaEventRecord(kernel_stop, stream);
             cudaEventSynchronize(kernel_stop);
             float ms = 0.0f;
@@ -189,7 +189,7 @@ int main(int /*argc*/, char** /*argv*/) {
     std::cout << "  - 2-Beam Real-Time Feasibility                 : [FEASIBLE] (" << beam_timings[2].avg_ms << " ms < 50 ms budget)\n\n";
 
     cudaFree(d_voltage);
-    cudaFree(d_intensity);
+    cudaFree(d_voltages);
     cudaEventDestroy(kernel_start);
     cudaEventDestroy(kernel_stop);
     cudaStreamDestroy(stream);

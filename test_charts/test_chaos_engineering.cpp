@@ -114,17 +114,17 @@ bool test_dynamic_antenna_mortality_and_revival(std::size_t n_ant = 256) {
     config.trajectories[0].direction_rate_per_sample = {1.0e-5f, 0.0f};
 
     const std::size_t in_bytes = n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t);
-    const std::size_t out_bytes = n_time * n_freq * sizeof(float);
+    const std::size_t out_bytes = n_time * n_freq * sizeof(float2);
 
     kotekan::int4x2_t* d_packed = nullptr;
-    float* d_intensity = nullptr;
+    float2* d_voltages = nullptr;
     cudaMalloc(&d_packed, in_bytes);
-    cudaMalloc(&d_intensity, out_bytes);
+    cudaMalloc(&d_voltages, out_bytes);
 
     cudaStream_t stream;
     cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
 
-    std::vector<float> h_out(n_time * n_freq);
+    std::vector<float2> h_out(n_time * n_freq);
     bool all_stages_valid = true;
     std::size_t total_nans = 0, total_infs = 0;
 
@@ -168,16 +168,16 @@ bool test_dynamic_antenna_mortality_and_revival(std::size_t n_ant = 256) {
 
         cudaMemcpyAsync(d_packed, h_packed.data(), in_bytes, cudaMemcpyHostToDevice, stream);
         kotekan::launch_beam_tracker_v5_multibeam(
-            d_packed, d_intensity, n_time, n_freq, n_ant, 1, freqs, config, stream, batch * 5);
-        cudaMemcpyAsync(h_out.data(), d_intensity, out_bytes, cudaMemcpyDeviceToHost, stream);
+            d_packed, d_voltages, n_time, n_freq, n_ant, 1, freqs, config, stream, batch * 5);
+        cudaMemcpyAsync(h_out.data(), d_voltages, out_bytes, cudaMemcpyDeviceToHost, stream);
         cudaStreamSynchronize(stream);
 
         // Verify output intensity scaling
         double sum_val = 0.0;
-        for (float v : h_out) {
-            if (std::isnan(v)) total_nans++;
-            if (std::isinf(v)) total_infs++;
-            sum_val += v;
+        for (const auto& v : h_out) {
+            if (std::isnan(v.x) || std::isnan(v.y)) total_nans++;
+            if (std::isinf(v.x) || std::isinf(v.y)) total_infs++;
+            sum_val += static_cast<double>(v.x * v.x + v.y * v.y);
         }
         const double meas_avg = sum_val / (n_time * n_freq);
         // Effective 4-bit rounded amplitude factor
@@ -194,7 +194,7 @@ bool test_dynamic_antenna_mortality_and_revival(std::size_t n_ant = 256) {
     }
 
     cudaFree(d_packed);
-    cudaFree(d_intensity);
+    cudaFree(d_voltages);
     cudaStreamDestroy(stream);
 
     const bool passed = (total_nans == 0 && total_infs == 0 && all_stages_valid);
@@ -241,12 +241,12 @@ bool test_upchannelized_beam_tracker_pipeline() {
     }
 
     kotekan::int4x2_t* d_packed = nullptr;
-    float* d_intensity = nullptr;
+    float2* d_voltages = nullptr;
     const std::size_t in_bytes = n_time * n_fine_freq * n_ant * sizeof(kotekan::int4x2_t);
-    const std::size_t out_bytes = n_time * n_fine_freq * 4 * sizeof(float);
+    const std::size_t out_bytes = n_time * n_fine_freq * 4 * sizeof(float2);
 
     cudaMalloc(&d_packed, in_bytes);
-    cudaMalloc(&d_intensity, out_bytes);
+    cudaMalloc(&d_voltages, out_bytes);
     cudaMemcpy(d_packed, h_packed.data(), in_bytes, cudaMemcpyHostToDevice);
 
     cudaEvent_t start, stop;
@@ -255,20 +255,20 @@ bool test_upchannelized_beam_tracker_pipeline() {
 
     cudaEventRecord(start);
     kotekan::launch_beam_tracker_v5_multibeam(
-        d_packed, d_intensity, n_time, n_fine_freq, n_ant, 4, fine_freqs, config);
+        d_packed, d_voltages, n_time, n_fine_freq, n_ant, 4, fine_freqs, config);
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
 
     float ms = 0.0f;
     cudaEventElapsedTime(&ms, start, stop);
 
-    std::vector<float> h_out(n_time * n_fine_freq * 4);
-    cudaMemcpy(h_out.data(), d_intensity, out_bytes, cudaMemcpyDeviceToHost);
+    std::vector<float2> h_out(n_time * n_fine_freq * 4);
+    cudaMemcpy(h_out.data(), d_voltages, out_bytes, cudaMemcpyDeviceToHost);
 
     std::size_t nans = 0, infs = 0;
-    for (float v : h_out) {
-        if (std::isnan(v)) nans++;
-        if (std::isinf(v)) infs++;
+    for (const auto& v : h_out) {
+        if (std::isnan(v.x) || std::isnan(v.y)) nans++;
+        if (std::isinf(v.x) || std::isinf(v.y)) infs++;
     }
 
     std::cout << "  Execution Time: " << ms << " ms (" 
@@ -276,7 +276,7 @@ bool test_upchannelized_beam_tracker_pipeline() {
     std::cout << "  Fine frequency beam stability: NaNs=" << nans << ", Infs=" << infs << "\n";
 
     cudaFree(d_packed);
-    cudaFree(d_intensity);
+    cudaFree(d_voltages);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 
@@ -319,33 +319,32 @@ bool test_extreme_sky_coordinates_and_horizons() {
     config.trajectories[3].direction_rate_per_sample = {0.001f, 0.0f}; // Crosses horizon rapidly
 
     kotekan::int4x2_t* d_packed = nullptr;
-    float* d_intensity = nullptr;
+    float2* d_voltages = nullptr;
     const std::size_t in_bytes = n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t);
-    const std::size_t out_bytes = n_time * n_freq * 4 * sizeof(float);
+    const std::size_t out_bytes = n_time * n_freq * 4 * sizeof(float2);
 
     cudaMalloc(&d_packed, in_bytes);
-    cudaMalloc(&d_intensity, out_bytes);
+    cudaMalloc(&d_voltages, out_bytes);
     cudaMemcpy(d_packed, h_packed.data(), in_bytes, cudaMemcpyHostToDevice);
 
     kotekan::launch_beam_tracker_v5_multibeam(
-        d_packed, d_intensity, n_time, n_freq, n_ant, 4, freqs, config);
+        d_packed, d_voltages, n_time, n_freq, n_ant, 4, freqs, config);
 
-    std::vector<float> h_out(n_time * n_freq * 4);
-    cudaMemcpy(h_out.data(), d_intensity, out_bytes, cudaMemcpyDeviceToHost);
+    std::vector<float2> h_out(n_time * n_freq * 4);
+    cudaMemcpy(h_out.data(), d_voltages, out_bytes, cudaMemcpyDeviceToHost);
 
-    std::size_t nans = 0, infs = 0, negatives = 0;
-    for (float v : h_out) {
-        if (std::isnan(v)) nans++;
-        if (std::isinf(v)) infs++;
-        if (v < 0.0f) negatives++;
+    std::size_t nans = 0, infs = 0;
+    for (const auto& v : h_out) {
+        if (std::isnan(v.x) || std::isnan(v.y)) nans++;
+        if (std::isinf(v.x) || std::isinf(v.y)) infs++;
     }
 
-    std::cout << "  Horizon Clamping Check: NaNs=" << nans << ", Infs=" << infs << ", Negatives=" << negatives << "\n";
+    std::cout << "  Horizon Clamping Check: NaNs=" << nans << ", Infs=" << infs << "\n";
 
     cudaFree(d_packed);
-    cudaFree(d_intensity);
+    cudaFree(d_voltages);
 
-    const bool passed = (nans == 0 && infs == 0 && negatives == 0);
+    const bool passed = (nans == 0 && infs == 0);
     std::cout << "  Result: " << (passed ? "[PASSED] Beyond-horizon & extreme slew coordinates clamped robustly!" : "[FAILED]") << "\n\n";
     return passed;
 }

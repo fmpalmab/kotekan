@@ -174,9 +174,13 @@ std::vector<kotekan::int4x2_t> simulate_rfsoc_ingest_and_shuffle(
 // High-Precision Double CPU Analytical Reference
 // ============================================================================
 
+// ============================================================================
+// High-Precision Double CPU Analytical Reference (Complex Voltages)
+// ============================================================================
+
 void cpu_reference_multibeam(
     const std::vector<kotekan::int4x2_t>& packed,
-    float* out_intensity,
+    float2* out_voltages,
     std::size_t n_time,
     std::size_t n_freq,
     std::size_t n_ant,
@@ -224,8 +228,8 @@ void cpu_reference_multibeam(
                     sum_i += w_r * static_cast<double>(v_i) + w_i * static_cast<double>(v_r);
                 }
 
-                const float intensity = static_cast<float>(sum_r * sum_r + sum_i * sum_i);
-                out_intensity[(t * n_freq + f) * max_beams_stride + b] = intensity;
+                out_voltages[(t * n_freq + f) * max_beams_stride + b] =
+                    make_float2(static_cast<float>(sum_r), static_cast<float>(sum_i));
             }
         }
     }
@@ -242,13 +246,12 @@ struct ValidationMetrics {
     double rms_error = 0.0;
     std::size_t nan_count = 0;
     std::size_t inf_count = 0;
-    std::size_t negative_count = 0;
     std::size_t mismatch_count = 0;
 };
 
-ValidationMetrics verify_intensities(
-    const float* ref,
-    const float* test,
+ValidationMetrics verify_voltages(
+    const float2* ref,
+    const float2* test,
     std::size_t count,
     float rel_tol = 1.0e-3f,
     float abs_tol = 1.0e-3f) {
@@ -257,20 +260,22 @@ ValidationMetrics verify_intensities(
     double sum_sq = 0.0;
 
     for (std::size_t i = 0; i < count; ++i) {
-        const float r = ref[i];
-        const float t = test[i];
+        const float2 r = ref[i];
+        const float2 t = test[i];
 
-        if (std::isnan(t)) { m.nan_count++; m.passed = false; continue; }
-        if (std::isinf(t)) { m.inf_count++; m.passed = false; continue; }
-        if (t < 0.0f) { m.negative_count++; m.passed = false; }
+        if (std::isnan(t.x) || std::isnan(t.y)) { m.nan_count++; m.passed = false; continue; }
+        if (std::isinf(t.x) || std::isinf(t.y)) { m.inf_count++; m.passed = false; continue; }
 
-        const double diff = std::abs(static_cast<double>(r) - static_cast<double>(t));
+        const double diff_r = std::abs(static_cast<double>(r.x) - static_cast<double>(t.x));
+        const double diff_i = std::abs(static_cast<double>(r.y) - static_cast<double>(t.y));
+        const double diff = std::sqrt(diff_r * diff_r + diff_i * diff_i);
         sum_sq += diff * diff;
 
         if (diff > m.max_abs_error) m.max_abs_error = diff;
 
-        if (r > 1e-4f) {
-            const double rel_err = diff / r;
+        const double ref_mag = std::sqrt(static_cast<double>(r.x) * r.x + static_cast<double>(r.y) * r.y);
+        if (ref_mag > 1e-4) {
+            const double rel_err = diff / ref_mag;
             if (rel_err > m.max_rel_error) m.max_rel_error = rel_err;
             if (diff > abs_tol && rel_err > rel_tol) {
                 m.mismatch_count++;
@@ -299,7 +304,7 @@ TestResult test_numerical_accuracy(
     int time_unroll = 8) {
 
     TestResult res;
-    res.test_name = "Numerical Accuracy & CPU Reference Equivalence";
+    res.test_name = "Numerical Accuracy & CPU Reference Equivalence (Complex Voltages)";
     res.n_ant = n_ant;
     res.n_time = n_time;
     res.n_freq = n_freq;
@@ -335,21 +340,21 @@ TestResult test_numerical_accuracy(
         n_time, n_freq, n_ant, freqs, sources, 0.5f, config.spacing_m);
 
     const std::size_t total_out_elements = n_time * n_freq * max_beams;
-    std::vector<float> cpu_ref(total_out_elements, 0.0f);
-    std::vector<float> gpu_out(total_out_elements, 0.0f);
+    std::vector<float2> cpu_ref(total_out_elements);
+    std::vector<float2> gpu_out(total_out_elements);
 
     const std::size_t eval_samples = std::min(n_time, std::size_t(640));
     cpu_reference_multibeam(
         host_packed, cpu_ref.data(), eval_samples, n_freq, n_ant, max_beams, freqs, config);
 
     kotekan::int4x2_t* d_packed = nullptr;
-    float* d_intensity = nullptr;
+    float2* d_voltages = nullptr;
     const std::size_t input_bytes = n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t);
-    const std::size_t output_bytes = total_out_elements * sizeof(float);
+    const std::size_t output_bytes = total_out_elements * sizeof(float2);
 
     cudaMalloc(&d_packed, input_bytes);
-    cudaMalloc(&d_intensity, output_bytes);
-    cudaMemset(d_intensity, 0, output_bytes);
+    cudaMalloc(&d_voltages, output_bytes);
+    cudaMemset(d_voltages, 0, output_bytes);
     cudaMemcpy(d_packed, host_packed.data(), input_bytes, cudaMemcpyHostToDevice);
 
     cudaStream_t stream;
@@ -361,48 +366,34 @@ TestResult test_numerical_accuracy(
 
     cudaEventRecord(start, stream);
     kotekan::launch_beam_tracker_v5_multibeam(
-        d_packed, d_intensity, n_time, n_freq, n_ant, max_beams, freqs, config, stream);
+        d_packed, d_voltages, n_time, n_freq, n_ant, max_beams, freqs, config, stream, 0);
     cudaEventRecord(stop, stream);
     cudaEventSynchronize(stop);
 
-    float ms = 0.0f;
-    cudaEventElapsedTime(&ms, start, stop);
-    res.kernel_time_ms = ms;
-    res.throughput_gb_s = (static_cast<double>(input_bytes) / (1024.0 * 1024.0 * 1024.0)) / (ms / 1000.0);
+    float elapsed_ms = 0.0f;
+    cudaEventElapsedTime(&elapsed_ms, start, stop);
+    res.kernel_time_ms = elapsed_ms;
 
-    cudaMemcpy(gpu_out.data(), d_intensity, output_bytes, cudaMemcpyDeviceToHost);
+    const double data_gb = static_cast<double>(input_bytes) / (1024.0 * 1024.0 * 1024.0);
+    res.throughput_gb_s = data_gb / (elapsed_ms / 1000.0);
 
-    bool all_beams_match = true;
+    cudaMemcpy(gpu_out.data(), d_voltages, eval_samples * n_freq * max_beams * sizeof(float2), cudaMemcpyDeviceToHost);
+
+    const auto metrics = verify_voltages(
+        cpu_ref.data(), gpu_out.data(), eval_samples * n_freq * max_beams);
+
+    res.passed = metrics.passed;
     std::ostringstream ss;
-
-    for (std::size_t b = 0; b < active_beams; ++b) {
-        std::vector<float> ref_beam(eval_samples * n_freq);
-        std::vector<float> test_beam(eval_samples * n_freq);
-
-        for (std::size_t i = 0; i < eval_samples * n_freq; ++i) {
-            ref_beam[i] = cpu_ref[i * max_beams + b];
-            test_beam[i] = gpu_out[i * max_beams + b];
-        }
-
-        const auto val = verify_intensities(ref_beam.data(), test_beam.data(), eval_samples * n_freq);
-        if (!val.passed) {
-            all_beams_match = false;
-            ss << "Beam " << b << " MISMATCH (MaxRelErr=" << val.max_rel_error 
-               << ", MaxAbsErr=" << val.max_abs_error << ", Mismatches=" << val.mismatch_count << "); ";
-        }
-    }
-
-    res.passed = all_beams_match;
-    if (res.passed) {
-        ss << "Passed (MaxRelErr < 0.1%, RMS error < 1e-3 across all " << active_beams << " active beams)";
-    }
+    ss << "RMS Error=" << std::scientific << std::setprecision(2) << metrics.rms_error
+       << ", MaxAbsErr=" << metrics.max_abs_error
+       << ", Mismatches=" << metrics.mismatch_count;
     res.details = ss.str();
 
     cudaFree(d_packed);
-    cudaFree(d_intensity);
+    cudaFree(d_voltages);
+    cudaStreamDestroy(stream);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    cudaStreamDestroy(stream);
 
     return res;
 }
@@ -474,27 +465,28 @@ TestResult test_astronomical_coherent_gain_and_profile(
 
     const std::size_t max_beams = 4;
     const std::size_t total_out_elements = n_time * n_freq * max_beams;
-    std::vector<float> gpu_out(total_out_elements, 0.0f);
+    std::vector<float2> gpu_out(total_out_elements);
 
     kotekan::int4x2_t* d_packed = nullptr;
-    float* d_intensity = nullptr;
+    float2* d_voltages = nullptr;
     const std::size_t input_bytes = n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t);
-    const std::size_t output_bytes = total_out_elements * sizeof(float);
+    const std::size_t output_bytes = total_out_elements * sizeof(float2);
 
     cudaMalloc(&d_packed, input_bytes);
-    cudaMalloc(&d_intensity, output_bytes);
+    cudaMalloc(&d_voltages, output_bytes);
     cudaMemcpy(d_packed, host_packed.data(), input_bytes, cudaMemcpyHostToDevice);
 
     kotekan::launch_beam_tracker_v5_multibeam(
-        d_packed, d_intensity, n_time, n_freq, n_ant, max_beams, freqs, config);
-    cudaMemcpy(gpu_out.data(), d_intensity, output_bytes, cudaMemcpyDeviceToHost);
+        d_packed, d_voltages, n_time, n_freq, n_ant, max_beams, freqs, config);
+    cudaMemcpy(gpu_out.data(), d_voltages, output_bytes, cudaMemcpyDeviceToHost);
 
     double beam_avg[4] = {0.0, 0.0, 0.0, 0.0};
     const std::size_t n_spectra = n_time * n_freq;
 
     for (std::size_t i = 0; i < n_spectra; ++i) {
         for (std::size_t b = 0; b < 4; ++b) {
-            beam_avg[b] += gpu_out[i * max_beams + b];
+            const float2 v = gpu_out[i * max_beams + b];
+            beam_avg[b] += static_cast<double>(v.x * v.x + v.y * v.y);
         }
     }
     for (std::size_t b = 0; b < 4; ++b) beam_avg[b] /= n_spectra;
@@ -518,7 +510,7 @@ TestResult test_astronomical_coherent_gain_and_profile(
     res.details = ss.str();
 
     cudaFree(d_packed);
-    cudaFree(d_intensity);
+    cudaFree(d_voltages);
 
     return res;
 }
@@ -568,23 +560,25 @@ TestResult test_multisource_independence(
 
     const std::size_t max_beams = 4;
     const std::size_t total_out = n_time * n_freq * max_beams;
-    std::vector<float> gpu_out(total_out, 0.0f);
+    std::vector<float2> gpu_out(total_out);
 
     kotekan::int4x2_t* d_packed = nullptr;
-    float* d_intensity = nullptr;
+    float2* d_voltages = nullptr;
     cudaMalloc(&d_packed, n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t));
-    cudaMalloc(&d_intensity, total_out * sizeof(float));
+    cudaMalloc(&d_voltages, total_out * sizeof(float2));
     cudaMemcpy(d_packed, host_packed.data(), n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t), cudaMemcpyHostToDevice);
 
     kotekan::launch_beam_tracker_v5_multibeam(
-        d_packed, d_intensity, n_time, n_freq, n_ant, max_beams, freqs, config);
-    cudaMemcpy(gpu_out.data(), d_intensity, total_out * sizeof(float), cudaMemcpyDeviceToHost);
+        d_packed, d_voltages, n_time, n_freq, n_ant, max_beams, freqs, config);
+    cudaMemcpy(gpu_out.data(), d_voltages, total_out * sizeof(float2), cudaMemcpyDeviceToHost);
 
     double b0_sum = 0.0, b1_sum = 0.0;
     const std::size_t n_spectra = n_time * n_freq;
     for (std::size_t i = 0; i < n_spectra; ++i) {
-        b0_sum += gpu_out[i * max_beams + 0];
-        b1_sum += gpu_out[i * max_beams + 1];
+        const float2 v0 = gpu_out[i * max_beams + 0];
+        const float2 v1 = gpu_out[i * max_beams + 1];
+        b0_sum += static_cast<double>(v0.x * v0.x + v0.y * v0.y);
+        b1_sum += static_cast<double>(v1.x * v1.x + v1.y * v1.y);
     }
     b0_sum /= n_spectra;
     b1_sum /= n_spectra;
@@ -604,7 +598,7 @@ TestResult test_multisource_independence(
     res.details = ss.str();
 
     cudaFree(d_packed);
-    cudaFree(d_intensity);
+    cudaFree(d_voltages);
 
     return res;
 }
@@ -642,29 +636,32 @@ TestResult test_masking_stability(
     config.trajectories[0].direction_start = {src.l0, src.m0, 1.0f};
 
     const std::size_t total_out = n_time * n_freq;
-    std::vector<float> gpu_out(total_out, 0.0f);
+    std::vector<float2> gpu_out(total_out);
 
     kotekan::int4x2_t* d_packed = nullptr;
-    float* d_intensity = nullptr;
+    float2* d_voltages = nullptr;
     cudaMalloc(&d_packed, n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t));
-    cudaMalloc(&d_intensity, total_out * sizeof(float));
+    cudaMalloc(&d_voltages, total_out * sizeof(float2));
     cudaMemcpy(d_packed, host_packed.data(), n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t), cudaMemcpyHostToDevice);
 
     kotekan::launch_beam_tracker_v5_multibeam(
-        d_packed, d_intensity, n_time, n_freq, n_ant, 1, freqs, config);
-    cudaMemcpy(gpu_out.data(), d_intensity, total_out * sizeof(float), cudaMemcpyDeviceToHost);
+        d_packed, d_voltages, n_time, n_freq, n_ant, 1, freqs, config);
+    cudaMemcpy(gpu_out.data(), d_voltages, total_out * sizeof(float2), cudaMemcpyDeviceToHost);
 
-    const auto val = verify_intensities(gpu_out.data(), gpu_out.data(), total_out);
+    std::size_t nan_count = 0, inf_count = 0;
+    for (const auto& v : gpu_out) {
+        if (std::isnan(v.x) || std::isnan(v.y)) nan_count++;
+        if (std::isinf(v.x) || std::isinf(v.y)) inf_count++;
+    }
 
     std::ostringstream ss;
-    ss << "NaN count: " << val.nan_count << ", Inf count: " << val.inf_count 
-       << ", Negative count: " << val.negative_count;
+    ss << "NaN count: " << nan_count << ", Inf count: " << inf_count;
 
-    res.passed = (val.nan_count == 0 && val.inf_count == 0 && val.negative_count == 0);
+    res.passed = (nan_count == 0 && inf_count == 0);
     res.details = ss.str();
 
     cudaFree(d_packed);
-    cudaFree(d_intensity);
+    cudaFree(d_voltages);
 
     return res;
 }
@@ -726,27 +723,27 @@ TestResult test_dead_antenna_fault_tolerance(
 
     const std::size_t max_beams = 1;
     const std::size_t total_out = n_time * n_freq * max_beams;
-    std::vector<float> gpu_out(total_out, 0.0f);
+    std::vector<float2> gpu_out(total_out);
 
     kotekan::int4x2_t* d_packed = nullptr;
-    float* d_intensity = nullptr;
+    float2* d_voltages = nullptr;
     const std::size_t input_bytes = n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t);
-    const std::size_t output_bytes = total_out * sizeof(float);
+    const std::size_t output_bytes = total_out * sizeof(float2);
 
     cudaMalloc(&d_packed, input_bytes);
-    cudaMalloc(&d_intensity, output_bytes);
+    cudaMalloc(&d_voltages, output_bytes);
     cudaMemcpy(d_packed, host_packed.data(), input_bytes, cudaMemcpyHostToDevice);
 
     kotekan::launch_beam_tracker_v5_multibeam(
-        d_packed, d_intensity, n_time, n_freq, n_ant, max_beams, freqs, config);
-    cudaMemcpy(gpu_out.data(), d_intensity, output_bytes, cudaMemcpyDeviceToHost);
+        d_packed, d_voltages, n_time, n_freq, n_ant, max_beams, freqs, config);
+    cudaMemcpy(gpu_out.data(), d_voltages, output_bytes, cudaMemcpyDeviceToHost);
 
     double meas_sum = 0.0;
     std::size_t nan_count = 0, inf_count = 0;
-    for (float v : gpu_out) {
-        if (std::isnan(v)) nan_count++;
-        if (std::isinf(v)) inf_count++;
-        meas_sum += v;
+    for (const auto& v : gpu_out) {
+        if (std::isnan(v.x) || std::isnan(v.y)) nan_count++;
+        if (std::isinf(v.x) || std::isinf(v.y)) inf_count++;
+        meas_sum += static_cast<double>(v.x * v.x + v.y * v.y);
     }
     meas_sum /= (n_time * n_freq);
 
@@ -761,7 +758,7 @@ TestResult test_dead_antenna_fault_tolerance(
     res.details = ss.str();
 
     cudaFree(d_packed);
-    cudaFree(d_intensity);
+    cudaFree(d_voltages);
 
     return res;
 }
@@ -806,12 +803,12 @@ TestResult run_sustained_stress_test(
         n_time, n_freq, n_ant, freqs, {src}, 0.5f, config.spacing_m);
 
     const std::size_t input_bytes = n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t);
-    const std::size_t output_bytes = n_time * n_freq * max_beams * sizeof(float);
+    const std::size_t output_bytes = n_time * n_freq * max_beams * sizeof(float2);
 
     kotekan::int4x2_t* d_packed = nullptr;
-    float* d_intensity = nullptr;
+    float2* d_voltages = nullptr;
     cudaMalloc(&d_packed, input_bytes);
-    cudaMalloc(&d_intensity, output_bytes);
+    cudaMalloc(&d_voltages, output_bytes);
     cudaMemcpy(d_packed, host_packed.data(), input_bytes, cudaMemcpyHostToDevice);
 
     cudaStream_t stream;
@@ -831,7 +828,7 @@ TestResult run_sustained_stress_test(
     // Warmup
     for (int i = 0; i < 5; ++i) {
         kotekan::launch_beam_tracker_v5_multibeam(
-            d_packed, d_intensity, n_time, n_freq, n_ant, max_beams, freqs, config, stream, i * 48);
+            d_packed, d_voltages, n_time, n_freq, n_ant, max_beams, freqs, config, stream, i * 48);
         cudaStreamSynchronize(stream);
     }
 
@@ -843,7 +840,7 @@ TestResult run_sustained_stress_test(
     for (std::size_t iter = 0; iter < n_iterations; ++iter) {
         cudaEventRecord(start_ev, stream);
         kotekan::launch_beam_tracker_v5_multibeam(
-            d_packed, d_intensity, n_time, n_freq, n_ant, max_beams, freqs, config, stream, iter * 48);
+            d_packed, d_voltages, n_time, n_freq, n_ant, max_beams, freqs, config, stream, iter * 48);
         cudaEventRecord(stop_ev, stream);
         cudaEventSynchronize(stop_ev);
 
@@ -867,10 +864,10 @@ TestResult run_sustained_stress_test(
         memory_stable = false;
     }
 
-    std::vector<float> final_out(n_time * n_freq * max_beams);
-    cudaMemcpy(final_out.data(), d_intensity, output_bytes, cudaMemcpyDeviceToHost);
-    for (float v : final_out) {
-        if (std::isnan(v) || std::isinf(v) || v < 0.0f) {
+    std::vector<float2> final_out(n_time * n_freq * max_beams);
+    cudaMemcpy(final_out.data(), d_voltages, output_bytes, cudaMemcpyDeviceToHost);
+    for (const auto& v : final_out) {
+        if (std::isnan(v.x) || std::isnan(v.y) || std::isinf(v.x) || std::isinf(v.y)) {
             data_clean = false;
             break;
         }
@@ -900,7 +897,7 @@ TestResult run_sustained_stress_test(
     res.details = ss.str();
 
     cudaFree(d_packed);
-    cudaFree(d_intensity);
+    cudaFree(d_voltages);
     cudaEventDestroy(start_ev);
     cudaEventDestroy(stop_ev);
     cudaStreamDestroy(stream);

@@ -40,10 +40,10 @@ std::vector<kotekan::int4x2_t> generate_synthetic_data(
     return data;
 }
 
-// CPU Reference for numerical validation
+// CPU Reference for numerical validation of complex voltages
 void cpu_reference_beam_tracker(
     const std::vector<kotekan::int4x2_t>& packed,
-    float* intensity,
+    float2* voltages,
     std::size_t n_time,
     std::size_t n_freq,
     std::size_t n_ant,
@@ -92,29 +92,24 @@ void cpu_reference_beam_tracker(
                 int v_i = static_cast<int>((byte_val >> 4) & 0x0F);
                 if (v_i >= 8) v_i -= 16;
 
-                // Complex multiply: (w_r + i w_i) * (v_r - i v_i) -> standard phase steering
-                // In v5 kernel: (w_r * v_r - (-w_i) * v_i) = w_r * v_r + w_i * v_i
-                // and imag = w_r * v_i - w_i * v_r (depending on conjugate convention)
-                // Let's check kernel:
-                // s_r += w_r * p.x + (-w_i) * p.y
-                // s_i += w_r * p.y + w_i * p.x
                 sum_r += w_r * static_cast<double>(v_r) - w_i * static_cast<double>(v_i);
                 sum_i += w_r * static_cast<double>(v_i) + w_i * static_cast<double>(v_r);
             }
 
-            intensity[t * n_freq + f] = static_cast<float>(sum_r * sum_r + sum_i * sum_i);
+            voltages[t * n_freq + f] = make_float2(static_cast<float>(sum_r), static_cast<float>(sum_i));
         }
     }
 }
 
-bool check_tolerance(const float* ref, const float* test, std::size_t count,
-                     float rel_tol = 1e-3f, float abs_tol = 1e-4f) {
+bool check_tolerance_complex(const float2* ref, const float2* test, std::size_t count,
+                             float rel_tol = 1e-3f, float abs_tol = 1e-4f) {
     for (std::size_t i = 0; i < count; ++i) {
-        const float r = ref[i];
-        const float t = test[i];
-        const float diff = std::abs(r - t);
-        if (diff > abs_tol && diff > rel_tol * r) {
-            std::fprintf(stderr, "Mismatch at [%zu]: ref=%f, test=%f, diff=%f\n", i, r, t, diff);
+        const float diff_r = std::abs(ref[i].x - test[i].x);
+        const float diff_i = std::abs(ref[i].y - test[i].y);
+        if ((diff_r > abs_tol && diff_r > rel_tol * std::abs(ref[i].x)) ||
+            (diff_i > abs_tol && diff_i > rel_tol * std::abs(ref[i].y))) {
+            std::fprintf(stderr, "Mismatch at [%zu]: ref=(%f, %f), test=(%f, %f)\n",
+                         i, ref[i].x, ref[i].y, test[i].x, test[i].y);
             return false;
         }
     }
@@ -124,7 +119,7 @@ bool check_tolerance(const float* ref, const float* test, std::size_t count,
 void benchmark_case(std::size_t n_ant, std::size_t n_time, std::size_t n_freq = 336,
                     std::size_t integration_spectra = 320, int repeat = 10) {
     std::cout << "=================================================================\n";
-    std::cout << "Benchmarking Kotekan V5 Beam Tracker: n_ant=" << n_ant 
+    std::cout << "Benchmarking Kotekan V5 Complex Voltage Tracker: n_ant=" << n_ant 
               << ", n_time=" << n_time << ", n_freq=" << n_freq 
               << ", integration=" << integration_spectra << "\n";
     std::cout << "=================================================================\n";
@@ -144,8 +139,8 @@ void benchmark_case(std::size_t n_ant, std::size_t n_time, std::size_t n_freq = 
 
     const auto host_packed = generate_synthetic_data(n_time, n_freq, n_ant);
     const std::size_t total_out = n_time * n_freq;
-    std::vector<float> cpu_ref(total_out);
-    std::vector<float> gpu_out(total_out);
+    std::vector<float2> cpu_ref(total_out);
+    std::vector<float2> gpu_out(total_out);
 
     // 1. Compute CPU reference for smaller subset / validation
     cpu_reference_beam_tracker(host_packed, cpu_ref.data(), std::min(n_time, std::size_t(640)),
@@ -153,19 +148,19 @@ void benchmark_case(std::size_t n_ant, std::size_t n_time, std::size_t n_freq = 
 
     // 2. Validate Direct Kernel Launch
     kotekan::int4x2_t* d_packed = nullptr;
-    float* d_intensity = nullptr;
+    float2* d_voltages = nullptr;
     const std::size_t v_bytes = n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t);
-    const std::size_t out_bytes = total_out * sizeof(float);
+    const std::size_t out_bytes = total_out * sizeof(float2);
 
     cudaMalloc(&d_packed, v_bytes);
-    cudaMalloc(&d_intensity, out_bytes);
+    cudaMalloc(&d_voltages, out_bytes);
     cudaMemcpy(d_packed, host_packed.data(), v_bytes, cudaMemcpyHostToDevice);
 
-    kotekan::launch_beam_tracker_v5(d_packed, d_intensity, n_time, n_freq, n_ant, freqs, config);
-    cudaMemcpy(gpu_out.data(), d_intensity, out_bytes, cudaMemcpyDeviceToHost);
+    kotekan::launch_beam_tracker_v5(d_packed, d_voltages, n_time, n_freq, n_ant, freqs, config);
+    cudaMemcpy(gpu_out.data(), d_voltages, out_bytes, cudaMemcpyDeviceToHost);
 
-    const bool direct_match = check_tolerance(cpu_ref.data(), gpu_out.data(),
-                                              std::min(n_time, std::size_t(640)) * n_freq);
+    const bool direct_match = check_tolerance_complex(cpu_ref.data(), gpu_out.data(),
+                                                      std::min(n_time, std::size_t(640)) * n_freq);
     if (!direct_match) {
         std::cout << "  [FAIL] Direct launch numerical mismatch with CPU reference!\n";
     } else {
@@ -182,8 +177,8 @@ void benchmark_case(std::size_t n_ant, std::size_t n_time, std::size_t n_freq = 
             stream_engine.process_batch(0, host_packed.data(), gpu_out.data());
         }
 
-        const bool stream_match = check_tolerance(cpu_ref.data(), gpu_out.data(),
-                                                  std::min(n_time, std::size_t(640)) * n_freq);
+        const bool stream_match = check_tolerance_complex(cpu_ref.data(), gpu_out.data(),
+                                                          std::min(n_time, std::size_t(640)) * n_freq);
         if (!stream_match) {
             std::cout << "  [FAIL] Stream engine numerical mismatch!\n";
         } else {
@@ -193,7 +188,7 @@ void benchmark_case(std::size_t n_ant, std::size_t n_time, std::size_t n_freq = 
         // Measure GPU kernel-only latency
         std::vector<float> kernel_times;
         for (int i = 0; i < repeat; ++i) {
-            stream_engine.process_batch_device(0, d_packed, d_intensity);
+            stream_engine.process_batch_device(0, d_packed, d_voltages);
             kernel_times.push_back(stream_engine.last_kernel_time_ms());
         }
         float sum_ms = 0.0f;
@@ -224,12 +219,12 @@ void benchmark_case(std::size_t n_ant, std::size_t n_time, std::size_t n_freq = 
 
         // Warmup & capture
         for (int i = 0; i < 2; ++i) {
-            graph_engine.process_batch_device(0, d_packed, d_intensity);
+            graph_engine.process_batch_device(0, d_packed, d_voltages);
         }
 
         std::vector<float> kernel_times;
         for (int i = 0; i < repeat; ++i) {
-            graph_engine.process_batch_device(0, d_packed, d_intensity);
+            graph_engine.process_batch_device(0, d_packed, d_voltages);
             kernel_times.push_back(graph_engine.last_kernel_time_ms());
         }
         float sum_ms = 0.0f;
@@ -244,7 +239,7 @@ void benchmark_case(std::size_t n_ant, std::size_t n_time, std::size_t n_freq = 
     }
 
     cudaFree(d_packed);
-    cudaFree(d_intensity);
+    cudaFree(d_voltages);
 }
 
 } // namespace

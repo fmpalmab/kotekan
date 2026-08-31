@@ -40,8 +40,16 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
     _integration_spectra = config.get_default<int>(unique_name, "integration_spectra", 320);
     _spacing_m = config.get_default<float>(unique_name, "spacing_m", 0.6f);
 
+    _sample_period_s = config.get_default<double>(unique_name, "sample_period_s", 2.56e-6);
+
     _gpu_mem_voltage = config.get_default<std::string>(unique_name, "gpu_mem_voltage", "voltage");
-    _gpu_mem_intensity = config.get_default<std::string>(unique_name, "gpu_mem_intensity", "intensity");
+    // Support either "formed_beams" or backward-compatible "intensity" name
+    _gpu_mem_formed_beams = config.get_default<std::string>(unique_name, "gpu_mem_formed_beams",
+                                config.get_default<std::string>(unique_name, "gpu_mem_intensity", "formed_beams"));
+
+    const double site_lat_deg = config.get_default<double>(unique_name, "site_lat_deg", 49.3208);
+    const double site_lon_deg = config.get_default<double>(unique_name, "site_lon_deg", -119.6237);
+    const double site_alt_m = config.get_default<double>(unique_name, "site_alt_m", 545.0);
 
     const float l0 = config.get_default<float>(unique_name, "source_l0", 0.0f);
     const float m0 = config.get_default<float>(unique_name, "source_m0", 0.0f);
@@ -53,6 +61,7 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
 
     {
         std::lock_guard<std::mutex> lock(_global_mutex);
+        _shared_config.site = SiteLocation{site_lat_deg, site_lon_deg, site_alt_m};
         _shared_config.num_active_beams = config.get_default<int>(unique_name, "initial_active_beams", 1);
         _shared_config.trajectories[0].direction_start = Direction3D{l0, m0, n0};
         _shared_config.trajectories[0].direction_rate_per_sample = DirectionRate2D{dl, dm};
@@ -61,6 +70,15 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
         _shared_config.time_chunk_size = static_cast<std::size_t>(config.get_default<int>(unique_name, "time_chunk_size", 80));
         _shared_config.time_unroll = static_cast<std::size_t>(config.get_default<int>(unique_name, "time_unroll", 8));
         _shared_config.enable_cuda_graph = config.get_default<bool>(unique_name, "enable_cuda_graph", false);
+
+        // Optional initial celestial target (RA/Dec) in YAML
+        if (config.has(unique_name, "source_ra_deg") && config.has(unique_name, "source_dec_deg")) {
+            const double ra_deg = config.get<double>(unique_name, "source_ra_deg");
+            const double dec_deg = config.get<double>(unique_name, "source_dec_deg");
+            const double lst_hours = config.get_default<double>(unique_name, "initial_lst_hours", 0.0);
+            compute_celestial_trajectory(ra_deg, dec_deg, lst_hours, site_lat_deg, _sample_period_s, _shared_config.trajectories[0]);
+            INFO_NON_OO("Beam Tracker: Initialized beam 0 celestial target RA={:.4f}°, Dec={:.4f}°", ra_deg, dec_deg);
+        }
 
         // Load pre-configured bad / dead antenna elements if specified in YAML
         auto bad_elements = config.get_default<std::vector<int>>(unique_name, "bad_elements", {});
@@ -75,7 +93,7 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
         if (!_endpoints_registered) {
             auto& rest = restServer::instance();
 
-            // 1. Update Trajectory for a specific beam slot
+            // 1. Update Trajectory in direction cosines (l, m, dl, dm)
             rest.register_post_callback("/beam_tracker/set_trajectory", [](connectionInstance& conn, nlohmann::json& j) {
                 try {
                     std::size_t beam_id = j.value("beam_id", 0);
@@ -94,15 +112,56 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
                     const float my = _shared_config.trajectories[beam_id].direction_start.y;
                     const float tsq = lx * lx + my * my;
                     _shared_config.trajectories[beam_id].direction_start.z = (tsq <= 1.0f) ? std::sqrt(1.0f - tsq) : 0.0f;
+                    _shared_config.trajectories[beam_id].celestial_target.is_set = false;
 
-                    INFO_NON_OO("Beam Tracker: Updated trajectory for beam slot {:d} (l0={:.5f}, m0={:.5f})", beam_id, lx, my);
+                    INFO_NON_OO("Beam Tracker: Updated direction trajectory for beam {:d} (l0={:.5f}, m0={:.5f})", beam_id, lx, my);
                     conn.send_text_reply(fmt::format("Trajectory updated for beam slot {:d}\n", beam_id));
                 } catch (const std::exception& e) {
                     conn.send_error(e.what(), HTTP_RESPONSE::BAD_REQUEST);
                 }
             });
 
-            // 2. Enable / set number of active beams
+            // 2. Update Celestial Target directly using (RA, Dec) with Astrometry conversion
+            rest.register_post_callback("/beam_tracker/set_celestial_target", [this](connectionInstance& conn, nlohmann::json& j) {
+                try {
+                    std::size_t beam_id = j.value("beam_id", 0);
+                    if (beam_id >= MAX_TRACKER_BEAMS) {
+                        conn.send_error("beam_id exceeds MAX_TRACKER_BEAMS", HTTP_RESPONSE::BAD_REQUEST);
+                        return;
+                    }
+                    if (!j.contains("ra_deg") || !j.contains("dec_deg")) {
+                        conn.send_error("Missing ra_deg or dec_deg in request", HTTP_RESPONSE::BAD_REQUEST);
+                        return;
+                    }
+
+                    const double ra_deg = j["ra_deg"];
+                    const double dec_deg = j["dec_deg"];
+                    double lst_hours = j.value("lst_hours", 0.0);
+
+                    if (!j.contains("lst_hours") && j.contains("unix_timestamp_s")) {
+                        const double unix_s = j["unix_timestamp_s"];
+                        const double d = unix_s / 86400.0 - 10957.5;
+                        double gmst_hours = std::fmod(18.697374558 + 24.06570982441908 * d, 24.0);
+                        if (gmst_hours < 0.0) gmst_hours += 24.0;
+                        lst_hours = std::fmod(gmst_hours + _shared_config.site.lon_deg / 15.0, 24.0);
+                        if (lst_hours < 0.0) lst_hours += 24.0;
+                    }
+
+                    std::lock_guard<std::mutex> lk(_global_mutex);
+                    compute_celestial_trajectory(ra_deg, dec_deg, lst_hours, _shared_config.site.lat_deg,
+                                                 _sample_period_s, _shared_config.trajectories[beam_id]);
+
+                    const auto& traj = _shared_config.trajectories[beam_id];
+                    INFO_NON_OO("Beam Tracker: Set celestial target beam {:d} (RA={:.4f}°, Dec={:.4f}°) -> l0={:.5f}, m0={:.5f}",
+                                beam_id, ra_deg, dec_deg, traj.direction_start.x, traj.direction_start.y);
+
+                    conn.send_text_reply(fmt::format("Celestial target set for beam {:d}: RA={:.4f}°, Dec={:.4f}°\n", beam_id, ra_deg, dec_deg));
+                } catch (const std::exception& e) {
+                    conn.send_error(e.what(), HTTP_RESPONSE::BAD_REQUEST);
+                }
+            });
+
+            // 3. Enable / set number of active beams
             rest.register_post_callback("/beam_tracker/enable_beam", [](connectionInstance& conn, nlohmann::json& j) {
                 try {
                     std::size_t count = j.value("num_active_beams", 1);
@@ -115,7 +174,7 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
                 }
             });
 
-            // 3. Mask / Unmask Antenna (Fault-tolerance for dead/failing antennas)
+            // 4. Mask / Unmask Antenna (Fault-tolerance for dead/failing antennas)
             rest.register_post_callback("/beam_tracker/mask_antenna", [](connectionInstance& conn, nlohmann::json& j) {
                 try {
                     if (!j.contains("antenna_id")) {
@@ -138,7 +197,7 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
                 }
             });
 
-            // 4. Batch Mask Antennas
+            // 5. Batch Mask Antennas
             rest.register_post_callback("/beam_tracker/set_antenna_mask", [](connectionInstance& conn, nlohmann::json& j) {
                 try {
                     std::lock_guard<std::mutex> lk(_global_mutex);
@@ -164,15 +223,21 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
                 }
             });
 
-            // 5. Status Query
+            // 6. Status Query
             rest.register_get_callback("/beam_tracker/status", [this](connectionInstance& conn) {
                 nlohmann::json reply;
                 std::lock_guard<std::mutex> lk(_global_mutex);
+                reply["output_format"] = "complex64 (float2: real, imag)";
                 reply["num_active_beams"] = _shared_config.num_active_beams;
                 reply["max_beams_capacity"] = MAX_TRACKER_BEAMS;
                 reply["integration_spectra"] = _shared_config.integration_spectra;
                 reply["spacing_m"] = _shared_config.spacing_m;
                 reply["total_elements"] = _num_elements;
+                reply["site"] = {
+                    {"lat_deg", _shared_config.site.lat_deg},
+                    {"lon_deg", _shared_config.site.lon_deg},
+                    {"alt_m", _shared_config.site.alt_m}
+                };
 
                 std::size_t active_ant_count = 0;
                 nlohmann::json bad_elems = nlohmann::json::array();
@@ -195,6 +260,12 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
                     b_info["source_n0"] = _shared_config.trajectories[b].direction_start.z;
                     b_info["source_dl"] = _shared_config.trajectories[b].direction_rate_per_sample.dl;
                     b_info["source_dm"] = _shared_config.trajectories[b].direction_rate_per_sample.dm;
+                    if (_shared_config.trajectories[b].celestial_target.is_set) {
+                        b_info["celestial_target"] = {
+                            {"ra_deg", _shared_config.trajectories[b].celestial_target.ra_deg},
+                            {"dec_deg", _shared_config.trajectories[b].celestial_target.dec_deg}
+                        };
+                    }
                     reply["beams"].push_back(b_info);
                 }
                 conn.send_json_reply(reply);
@@ -216,7 +287,7 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
     set_name("cudaBeamTrackerCommand");
 
     gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_voltage, true, false, true));
-    gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_intensity, false, true, true));
+    gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_formed_beams, false, true, true));
 }
 
 cudaEvent_t cudaBeamTrackerCommand::execute(
@@ -245,8 +316,8 @@ cudaEvent_t cudaBeamTrackerCommand::execute(
     const std::size_t output_bytes = static_cast<std::size_t>(_num_local_freq) *
                                      static_cast<std::size_t>(_samples_per_data_set) *
                                      static_cast<std::size_t>(_max_beams) *
-                                     sizeof(float);
-    void* output_memory = device.get_gpu_memory_array(_gpu_mem_intensity, pipestate.gpu_frame_id,
+                                     sizeof(float2);
+    void* output_memory = device.get_gpu_memory_array(_gpu_mem_formed_beams, pipestate.gpu_frame_id,
                                                       _gpu_buffer_depth, output_bytes);
 
     record_start_event();
@@ -257,7 +328,7 @@ cudaEvent_t cudaBeamTrackerCommand::execute(
 
     launch_beam_tracker_v5_multibeam(
         reinterpret_cast<const int4x2_t*>(input_memory),
-        reinterpret_cast<float*>(output_memory),
+        reinterpret_cast<float2*>(output_memory),
         static_cast<std::size_t>(_samples_per_data_set),
         static_cast<std::size_t>(_num_local_freq),
         static_cast<std::size_t>(_num_elements),

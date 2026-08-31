@@ -18,7 +18,7 @@ namespace kotekan {
 
 /**
  * @class cudaBeamTrackerCommand
- * @brief cudaCommand stage plugin for running the V5 Multi-Beam Tracker in cudaProcess with live REST control.
+ * @brief cudaCommand stage plugin for running the V5 Multi-Beam Tracker in cudaProcess with live REST control and Astrometry tracking.
  */
 class cudaBeamTrackerCommand : public cudaCommand {
 public:
@@ -38,9 +38,10 @@ private:
     float _spacing_m;
     int32_t _buffer_depth;
     int32_t _max_beams;
+    double _sample_period_s;
 
     std::string _gpu_mem_voltage;
-    std::string _gpu_mem_intensity;
+    std::string _gpu_mem_formed_beams;
 
     std::vector<double> _frequencies_hz;
 

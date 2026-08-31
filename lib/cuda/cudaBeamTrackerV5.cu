@@ -65,7 +65,7 @@ __device__ __forceinline__ void tracker_weight_v5(const float3 position,
 template <int N_ANT, int TIME_UNROLL>
 __global__ void __launch_bounds__(128, 4)
 tracker_v5_multibeam_kernel(
-    float* __restrict__ intensity,
+    float2* __restrict__ voltages,
     const float* __restrict__ window_directions,
     const double* __restrict__ wavenumbers,
     const std::uint8_t* __restrict__ packed,
@@ -139,10 +139,10 @@ tracker_v5_multibeam_kernel(
                                        : t_win_end;
 
     const std::size_t t_stride = n_freq * N_ANT;
-    const std::size_t intensity_stride = n_freq * max_beams_stride;
+    const std::size_t voltage_stride = n_freq * max_beams_stride;
 
     const std::uint8_t* packed_ptr = packed + (t_chunk_start * n_freq + freq) * N_ANT + lane;
-    float* intensity_ptr = intensity + (t_chunk_start * n_freq + freq) * max_beams_stride + beam_idx;
+    float2* voltages_ptr = voltages + (t_chunk_start * n_freq + freq) * max_beams_stride + beam_idx;
 
     std::size_t t = t_chunk_start;
 
@@ -178,12 +178,12 @@ tracker_v5_multibeam_kernel(
         if (lane == 0) {
             #pragma unroll
             for (int k = 0; k < TIME_UNROLL; ++k) {
-                intensity_ptr[k * intensity_stride] = s_r[k] * s_r[k] + s_i[k] * s_i[k];
+                voltages_ptr[k * voltage_stride] = make_float2(s_r[k], s_i[k]);
             }
         }
 
         packed_ptr += TIME_UNROLL * t_stride;
-        intensity_ptr += TIME_UNROLL * intensity_stride;
+        voltages_ptr += TIME_UNROLL * voltage_stride;
     }
 
     // Remainder loop
@@ -205,17 +205,17 @@ tracker_v5_multibeam_kernel(
         }
 
         if (lane == 0) {
-            *intensity_ptr = s_r * s_r + s_i * s_i;
+            *voltages_ptr = make_float2(s_r, s_i);
         }
 
         packed_ptr += t_stride;
-        intensity_ptr += intensity_stride;
+        voltages_ptr += voltage_stride;
     }
 }
 
 template <int N_ANT, int TIME_UNROLL>
 void dispatch_kernel(
-    float* d_intensity,
+    float2* d_voltages,
     const float* d_window_directions,
     const double* d_wavenumbers,
     const std::uint8_t* d_packed,
@@ -237,7 +237,7 @@ void dispatch_kernel(
         static_cast<unsigned int>((total_warps + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK);
 
     tracker_v5_multibeam_kernel<N_ANT, TIME_UNROLL><<<grid_dim, block_dim, 0, stream>>>(
-        d_intensity,
+        d_voltages,
         d_window_directions,
         d_wavenumbers,
         d_packed,
@@ -257,7 +257,7 @@ void dispatch_kernel(
 
 void launch_beam_tracker_v5_multibeam(
     const int4x2_t* d_packed,
-    float* d_intensity,
+    float2* d_voltages,
     std::size_t n_time,
     std::size_t n_freq,
     std::size_t n_ant,
@@ -352,14 +352,14 @@ void launch_beam_tracker_v5_multibeam(
         switch (config.time_unroll) {
             case 2:
                 dispatch_kernel<N_A, 2>(
-                    d_intensity, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
+                    d_voltages, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
                     n_time, n_freq, config.integration_spectra, config.time_chunk_size,
                     chunks_per_window, config.spacing_m, num_active_beams, max_beams_stride,
                     total_warps, stream);
                 break;
             case 4:
                 dispatch_kernel<N_A, 4>(
-                    d_intensity, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
+                    d_voltages, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
                     n_time, n_freq, config.integration_spectra, config.time_chunk_size,
                     chunks_per_window, config.spacing_m, num_active_beams, max_beams_stride,
                     total_warps, stream);
@@ -367,7 +367,7 @@ void launch_beam_tracker_v5_multibeam(
             case 8:
             default:
                 dispatch_kernel<N_A, 8>(
-                    d_intensity, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
+                    d_voltages, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
                     n_time, n_freq, config.integration_spectra, config.time_chunk_size,
                     chunks_per_window, config.spacing_m, num_active_beams, max_beams_stride,
                     total_warps, stream);
@@ -394,7 +394,7 @@ void launch_beam_tracker_v5_multibeam(
 
 void launch_beam_tracker_v5(
     const int4x2_t* d_packed,
-    float* d_intensity,
+    float2* d_voltages,
     std::size_t n_time,
     std::size_t n_freq,
     std::size_t n_ant,
@@ -412,9 +412,10 @@ void launch_beam_tracker_v5(
     multi_cfg.time_unroll = config.time_unroll;
     multi_cfg.enable_cuda_graph = config.enable_cuda_graph;
     multi_cfg.antenna_mask = config.antenna_mask;
+    multi_cfg.site = config.site;
 
     launch_beam_tracker_v5_multibeam(
-        d_packed, d_intensity, n_time, n_freq, n_ant, 1, frequencies_hz, multi_cfg, stream, window_offset);
+        d_packed, d_voltages, n_time, n_freq, n_ant, 1, frequencies_hz, multi_cfg, stream, window_offset);
 }
 
 struct CudaBeamTrackerV5Stream::Impl {
@@ -426,7 +427,7 @@ struct CudaBeamTrackerV5Stream::Impl {
 
     cudaStream_t stream = nullptr;
     int4x2_t* d_packed = nullptr;
-    float* d_intensity = nullptr;
+    float2* d_voltages = nullptr;
     float* d_window_directions = nullptr;
     double* d_wavenumbers = nullptr;
     std::uint8_t* d_antenna_mask = nullptr;
@@ -457,6 +458,7 @@ struct CudaBeamTrackerV5Stream::Impl {
         config.time_unroll = cfg.time_unroll;
         config.enable_cuda_graph = cfg.enable_cuda_graph;
         config.antenna_mask = cfg.antenna_mask;
+        config.site = cfg.site;
 
         window_count = (n_time_per_batch + config.integration_spectra - 1) / config.integration_spectra;
         chunks_per_window = (config.integration_spectra + config.time_chunk_size - 1) / config.time_chunk_size;
@@ -467,10 +469,10 @@ struct CudaBeamTrackerV5Stream::Impl {
         CHECK_CUDA_ERROR_NON_OO(cudaEventCreate(&stop_event));
 
         const std::size_t packed_bytes = n_time_per_batch * n_freq * n_ant * sizeof(int4x2_t);
-        const std::size_t intensity_bytes = n_time_per_batch * n_freq * sizeof(float);
+        const std::size_t voltages_bytes = n_time_per_batch * n_freq * sizeof(float2);
 
         CHECK_CUDA_ERROR_NON_OO(cudaMalloc(&d_packed, packed_bytes));
-        CHECK_CUDA_ERROR_NON_OO(cudaMalloc(&d_intensity, intensity_bytes));
+        CHECK_CUDA_ERROR_NON_OO(cudaMalloc(&d_voltages, voltages_bytes));
 
         h_window_directions.resize(window_count * 3);
         h_wavenumbers.resize(n_freq);
@@ -503,7 +505,7 @@ struct CudaBeamTrackerV5Stream::Impl {
 
     ~Impl() {
         if (d_packed) cudaFree(d_packed);
-        if (d_intensity) cudaFree(d_intensity);
+        if (d_voltages) cudaFree(d_voltages);
         if (d_window_directions) cudaFree(d_window_directions);
         if (d_wavenumbers) cudaFree(d_wavenumbers);
         if (d_antenna_mask) cudaFree(d_antenna_mask);
@@ -512,7 +514,7 @@ struct CudaBeamTrackerV5Stream::Impl {
         if (stream) cudaStreamDestroy(stream);
     }
 
-    void execute_internal(std::size_t window_offset, const int4x2_t* in_p, float* out_i) {
+    void execute_internal(std::size_t window_offset, const int4x2_t* in_p, float2* out_v) {
         for (std::size_t w = 0; w < window_count; ++w) {
             const std::size_t global_win = window_offset + w;
             const double center_sample =
@@ -537,28 +539,28 @@ struct CudaBeamTrackerV5Stream::Impl {
         const auto* packed_bytes = reinterpret_cast<const std::uint8_t*>(in_p);
         switch (n_ant) {
             case 32:
-                dispatch_kernel<32, 8>(out_i, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
+                dispatch_kernel<32, 8>(out_v, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
                                        n_time_per_batch, n_freq, config.integration_spectra,
                                        config.time_chunk_size, chunks_per_window, config.spacing_m,
                                        1, 1, total_warps, stream);
                 break;
             case 64:
-                dispatch_kernel<64, 8>(out_i, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
+                dispatch_kernel<64, 8>(out_v, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
                                        n_time_per_batch, n_freq, config.integration_spectra,
                                        config.time_chunk_size, chunks_per_window, config.spacing_m,
                                        1, 1, total_warps, stream);
                 break;
             case 128:
-                dispatch_kernel<128, 8>(out_i, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
-                                        n_time_per_batch, n_freq, config.integration_spectra,
-                                        config.time_chunk_size, chunks_per_window, config.spacing_m,
-                                        1, 1, total_warps, stream);
+                dispatch_kernel<128, 8>(out_v, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
+                                       n_time_per_batch, n_freq, config.integration_spectra,
+                                       config.time_chunk_size, chunks_per_window, config.spacing_m,
+                                       1, 1, total_warps, stream);
                 break;
             case 256:
-                dispatch_kernel<256, 8>(out_i, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
-                                        n_time_per_batch, n_freq, config.integration_spectra,
-                                        config.time_chunk_size, chunks_per_window, config.spacing_m,
-                                        1, 1, total_warps, stream);
+                dispatch_kernel<256, 8>(out_v, d_window_directions, d_wavenumbers, packed_bytes, d_antenna_mask,
+                                       n_time_per_batch, n_freq, config.integration_spectra,
+                                       config.time_chunk_size, chunks_per_window, config.spacing_m,
+                                       1, 1, total_warps, stream);
                 break;
         }
 
@@ -581,17 +583,17 @@ CudaBeamTrackerV5Stream::~CudaBeamTrackerV5Stream() = default;
 void CudaBeamTrackerV5Stream::process_batch(
     std::size_t window_offset,
     const int4x2_t* host_packed,
-    float* host_intensity) {
+    float2* host_voltages) {
 
     const std::size_t packed_bytes = impl_->n_time_per_batch * impl_->n_freq * impl_->n_ant * sizeof(int4x2_t);
-    const std::size_t intensity_bytes = impl_->n_time_per_batch * impl_->n_freq * sizeof(float);
+    const std::size_t voltages_bytes = impl_->n_time_per_batch * impl_->n_freq * sizeof(float2);
 
     CHECK_CUDA_ERROR_NON_OO(cudaMemcpyAsync(impl_->d_packed, host_packed, packed_bytes,
                                             cudaMemcpyHostToDevice, impl_->stream));
 
-    impl_->execute_internal(window_offset, impl_->d_packed, impl_->d_intensity);
+    impl_->execute_internal(window_offset, impl_->d_packed, impl_->d_voltages);
 
-    CHECK_CUDA_ERROR_NON_OO(cudaMemcpyAsync(host_intensity, impl_->d_intensity, intensity_bytes,
+    CHECK_CUDA_ERROR_NON_OO(cudaMemcpyAsync(host_voltages, impl_->d_voltages, voltages_bytes,
                                             cudaMemcpyDeviceToHost, impl_->stream));
     CHECK_CUDA_ERROR_NON_OO(cudaStreamSynchronize(impl_->stream));
 }
@@ -599,13 +601,13 @@ void CudaBeamTrackerV5Stream::process_batch(
 void CudaBeamTrackerV5Stream::process_batch_device(
     std::size_t window_offset,
     const int4x2_t* d_packed,
-    float* d_intensity) {
-    impl_->execute_internal(window_offset, d_packed, d_intensity);
+    float2* d_voltages) {
+    impl_->execute_internal(window_offset, d_packed, d_voltages);
 }
 
 float CudaBeamTrackerV5Stream::last_kernel_time_ms() const { return impl_->last_time_ms; }
 cudaStream_t CudaBeamTrackerV5Stream::get_stream() const { return impl_->stream; }
 int4x2_t* CudaBeamTrackerV5Stream::device_packed_buffer() { return impl_->d_packed; }
-float* CudaBeamTrackerV5Stream::device_intensity_buffer() { return impl_->d_intensity; }
+float2* CudaBeamTrackerV5Stream::device_voltages_buffer() { return impl_->d_voltages; }
 
 } // namespace kotekan

@@ -4,6 +4,7 @@
 #include "DataType.hpp" // for kotekan::int4x2_t
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -28,10 +29,25 @@ struct DirectionRate2D {
     float dm = 0.0f;
 };
 
+// Celestial Equatorial Coordinates (RA, Dec)
+struct CelestialTarget {
+    double ra_deg = 0.0;
+    double dec_deg = 0.0;
+    bool is_set = false;
+};
+
+// Telescope geographic site location
+struct SiteLocation {
+    double lat_deg = 49.3208;   // Latitude (degrees)
+    double lon_deg = -119.6237; // Longitude (degrees)
+    double alt_m = 545.0;       // Altitude (meters)
+};
+
 // Trajectory definition
 struct BeamTrackerTrajectory {
     Direction3D direction_start{0.0f, 0.0f, 1.0f};
     DirectionRate2D direction_rate_per_sample{0.0f, 0.0f};
+    CelestialTarget celestial_target;
 };
 
 // Single-beam configuration for backward compatibility
@@ -43,6 +59,7 @@ struct BeamTrackerConfig {
     std::size_t time_unroll = 8; // 2, 4, or 8
     bool enable_cuda_graph = false;
     std::array<uint8_t, MAX_TRACKER_ANTENNAS> antenna_mask;
+    SiteLocation site;
     BeamTrackerConfig() { antenna_mask.fill(1); }
 };
 
@@ -56,15 +73,69 @@ struct MultiBeamTrackerConfig {
     std::size_t time_unroll = 8;
     bool enable_cuda_graph = false;
     std::array<uint8_t, MAX_TRACKER_ANTENNAS> antenna_mask;
+    SiteLocation site;
     MultiBeamTrackerConfig() { antenna_mask.fill(1); }
 };
 
 /**
- * @brief Launch the V5 Beam Tracker kernel for a single beam.
+ * @brief Astrometry helper: Converts Celestial (RA, Dec) + Local Sidereal Time to Topocentric Direction Cosines (l, m, n) and rates (dl, dm).
+ *
+ * @param ra_deg            Right ascension in degrees
+ * @param dec_deg           Declination in degrees
+ * @param lst_hours         Local Sidereal Time in hours
+ * @param lat_deg           Observatory latitude in degrees
+ * @param sample_period_s   Time sample duration (dt in seconds)
+ * @param out_traj          Trajectory struct to populate
+ */
+inline void compute_celestial_trajectory(
+    double ra_deg,
+    double dec_deg,
+    double lst_hours,
+    double lat_deg,
+    double sample_period_s,
+    BeamTrackerTrajectory& out_traj) {
+
+    constexpr double DEG_TO_RAD = M_PI / 180.0;
+    constexpr double HOURS_TO_RAD = M_PI / 12.0;
+    constexpr double EARTH_ROT_RATE_RAD_S = 7.292115e-5; // rad / s
+
+    const double ha_rad = lst_hours * HOURS_TO_RAD - ra_deg * DEG_TO_RAD;
+    const double dec_rad = dec_deg * DEG_TO_RAD;
+    const double lat_rad = lat_deg * DEG_TO_RAD;
+
+    const double sin_dec = std::sin(dec_rad);
+    const double cos_dec = std::cos(dec_rad);
+    const double sin_lat = std::sin(lat_rad);
+    const double cos_lat = std::cos(lat_rad);
+    const double cos_ha = std::cos(ha_rad);
+    const double sin_ha = std::sin(ha_rad);
+
+    // Direction cosines in topocentric coordinate system (x = East, y = North, z = Up/Zenith)
+    const double l = -cos_dec * sin_ha;
+    const double m = cos_lat * sin_dec - sin_lat * cos_dec * cos_ha;
+    const double trans_sq = l * l + m * m;
+    const double n = (trans_sq <= 1.0) ? std::sqrt(1.0 - trans_sq) : 0.0;
+
+    // Time derivatives (d(ha)/dt = omega_earth)
+    const double dl_dt = -cos_dec * cos_ha * EARTH_ROT_RATE_RAD_S;
+    const double dm_dt = sin_lat * cos_dec * sin_ha * EARTH_ROT_RATE_RAD_S;
+
+    out_traj.direction_start = Direction3D{static_cast<float>(l), static_cast<float>(m), static_cast<float>(n)};
+    out_traj.direction_rate_per_sample = DirectionRate2D{
+        static_cast<float>(dl_dt * sample_period_s),
+        static_cast<float>(dm_dt * sample_period_s)
+    };
+    out_traj.celestial_target.ra_deg = ra_deg;
+    out_traj.celestial_target.dec_deg = dec_deg;
+    out_traj.celestial_target.is_set = true;
+}
+
+/**
+ * @brief Launch the V5 Beam Tracker kernel for a single beam with complex voltage output.
  */
 void launch_beam_tracker_v5(
     const int4x2_t* d_packed,
-    float* d_intensity,
+    float2* d_voltages,
     std::size_t n_time,
     std::size_t n_freq,
     std::size_t n_ant,
@@ -74,13 +145,13 @@ void launch_beam_tracker_v5(
     std::size_t window_offset = 0);
 
 /**
- * @brief Launch the V5 Beam Tracker kernel for multiple dynamic beams with pre-allocated output slots.
+ * @brief Launch the V5 Beam Tracker kernel for multiple dynamic beams with pre-allocated complex voltage output slots.
  *
- * @param d_packed              Device pointer to packed voltages [time][freq][antenna]
- * @param d_intensity           Device pointer to output intensities [time][freq][max_beams_allocated]
+ * @param d_packed              Device pointer to packed input voltages [time][freq][antenna] (int4x2_t)
+ * @param d_voltages            Device pointer to output complex formed beams [time][freq][max_beams_allocated] (float2: real, imag)
  * @param n_time                Number of time samples
  * @param n_freq                Number of frequency channels
- * @param n_ant                 Number of antennas
+ * @param n_ant                 Number of antennas (32, 64, 128, or 256)
  * @param max_beams_allocated   Total allocated beam stride in output buffer (e.g. 4 or 8)
  * @param frequencies_hz        Vector of physical frequencies in Hz
  * @param config                Multi-beam configuration with num_active_beams and trajectories
@@ -89,7 +160,7 @@ void launch_beam_tracker_v5(
  */
 void launch_beam_tracker_v5_multibeam(
     const int4x2_t* d_packed,
-    float* d_intensity,
+    float2* d_voltages,
     std::size_t n_time,
     std::size_t n_freq,
     std::size_t n_ant,
@@ -118,18 +189,18 @@ public:
     void process_batch(
         std::size_t window_offset,
         const int4x2_t* host_packed,
-        float* host_intensity);
+        float2* host_voltages);
 
     void process_batch_device(
         std::size_t window_offset,
         const int4x2_t* d_packed,
-        float* d_intensity);
+        float2* d_voltages);
 
     float last_kernel_time_ms() const;
 
     cudaStream_t get_stream() const;
     int4x2_t* device_packed_buffer();
-    float* device_intensity_buffer();
+    float2* device_voltages_buffer();
 
 private:
     struct Impl;

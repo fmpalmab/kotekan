@@ -11,13 +11,13 @@ spacing_m: 0.6
 max_beams: 4
 initial_active_beams: 1
 buffer_depth: 4
-sizeof_float: 4
+sizeof_complex_float: 8
 
 main_pool:
   kotekan_metadata_pool: chordMetadata
   num_metadata_objects: 50
 
-# Input buffer (matches rfsocHandlerShuffle layout [time][freq][antenna])
+# Input buffer (matches rfsocHandlerShuffle layout [time][freq][antenna] of int4x2_t)
 network_capture_buf:
   kotekan_buffer: standard
   num_frames: buffer_depth
@@ -27,11 +27,11 @@ network_capture_buf:
   zero_new_frames: true
   mlock_frames: false
 
-# Output intensity buffer [time][freq][max_beams] of float32
-host_intensity_buffer:
+# Output complex voltages buffer [time][freq][max_beams] of float2 (real, imag)
+host_formed_beams_buffer:
   kotekan_buffer: standard
   num_frames: buffer_depth
-  frame_size: samples_per_data_set * num_local_freq * max_beams * sizeof_float
+  frame_size: samples_per_data_set * num_local_freq * max_beams * sizeof_complex_float
   numa_node: 0
   metadata_pool: main_pool
   zero_new_frames: true
@@ -58,7 +58,7 @@ gpu:
     - name: cudaSyncInput
     - name: cudaBeamTrackerCommand
       gpu_mem_voltage: voltage
-      gpu_mem_intensity: intensity
+      gpu_mem_formed_beams: formed_beams
       num_elements: 64
       num_local_freq: 336
       samples_per_data_set: 15360
@@ -66,15 +66,16 @@ gpu:
       spacing_m: 0.6
       max_beams: 4
       initial_active_beams: 1
-      source_l0: 0.0
-      source_m0: 0.0
-      source_dl: 0.00001
-      source_dm: 0.0
+      site_lat_deg: 49.3208
+      site_lon_deg: -119.6237
+      source_ra_deg: 83.633
+      source_dec_deg: 22.014
+      initial_lst_hours: 5.575
     - name: cudaSyncOutput
     - name: cudaOutputData
       in_buf: host_voltage
-      gpu_mem: intensity
-      out_buf: host_intensity
+      gpu_mem: formed_beams
+      out_buf: host_formed_beams
   gpu_0:
     kotekan_stage: cudaProcess
     gpu_id: 0
@@ -82,15 +83,16 @@ gpu:
     in_buffers:
       host_voltage: network_capture_buf
     out_buffers:
-      host_intensity: host_intensity_buffer
+      host_formed_beams: host_formed_beams_buffer
 
-# Write output intensities to disk for verification
-write_intensity_output:
+# Write output complex voltages to disk for verification
+write_voltages_output:
   kotekan_stage: rawFileWrite
-  in_buf: host_intensity_buffer
+  in_buf: host_formed_beams_buffer
   base_dir: /tmp/test_charts_tracker
-  file_name: multibeam_intensity
+  file_name: multibeam_complex_voltages
   file_ext: bin
   num_frames_per_file: 1
   exit_after_n_files: 2
   prefix_hostname: false
+
