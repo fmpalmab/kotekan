@@ -23,11 +23,13 @@
 #include <thread>
 #include <vector>
 
+#include "chartsConstants.hpp"
+
 namespace {
 
 using Clock = std::chrono::high_resolution_clock;
-constexpr double SPEED_OF_LIGHT = 299792458.0;
-constexpr double TWO_PI = 2.0 * M_PI;
+constexpr double SPEED_OF_LIGHT = kotekan::charts::constants::speed_of_light_m_per_s;
+constexpr double TWO_PI = kotekan::charts::constants::two_pi;
 
 inline void get_antenna_pos(std::size_t n_ant, std::size_t element, float spacing_m, float& x, float& y) {
     if (n_ant == 32 || n_ant == 64) {

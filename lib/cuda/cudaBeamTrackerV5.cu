@@ -13,8 +13,8 @@ namespace kotekan {
 
 namespace {
 
-constexpr double speed_of_light_m_per_s = 299792458.0;
-constexpr double two_pi = 2.0 * M_PI;
+constexpr double speed_of_light_m_per_s = charts::constants::speed_of_light_m_per_s;
+constexpr double two_pi = charts::constants::two_pi;
 
 __device__ __forceinline__ float2 unpack_int4_fast(const std::uint32_t byte_val) {
 #if defined(__CUDA_ARCH__)

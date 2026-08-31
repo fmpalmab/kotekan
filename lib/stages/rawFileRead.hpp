@@ -44,6 +44,9 @@ private:
     bool prefix_hostname;
     // Interrupt Kotekan if run out of files to read
     bool end_interrupt;
+    // Loop over files repeatedly for stress testing
+    bool loop_files;
+    int max_repeats;
 };
 
 #endif

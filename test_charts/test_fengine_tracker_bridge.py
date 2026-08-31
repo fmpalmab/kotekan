@@ -19,7 +19,11 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-C_LIGHT = 299792458.0
+_test_charts_dir = os.path.dirname(os.path.abspath(__file__))
+if _test_charts_dir not in sys.path:
+    sys.path.insert(0, _test_charts_dir)
+
+from constants import C_LIGHT, DEFAULT_SPACING_M
 
 
 def unpack_int4x2(u8_array: np.ndarray, format_type: str = "twos_complement") -> np.ndarray:
@@ -44,7 +48,7 @@ def unpack_int4x2(u8_array: np.ndarray, format_type: str = "twos_complement") ->
     return real + 1j * imag
 
 
-def get_antenna_positions(num_antennas: int, spacing_m: float = 0.6):
+def get_antenna_positions(num_antennas: int, spacing_m: float = DEFAULT_SPACING_M):
     """
     Returns (pos_x, pos_y) arrays for 64 (8x8) or 256 (16x16) rectangular grid.
     """

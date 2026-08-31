@@ -18,8 +18,10 @@
 #include <string.h>
 #include <vector>
 
+#include "chartsConstants.hpp"
+
 // Maximum number of frequencies in metadata array
-const int CHARTS_META_MAX_FREQ = 672;   // or 1024 
+const int CHARTS_META_MAX_FREQ = static_cast<int>(kotekan::charts::constants::charts_full_band_channels); 
 
 // Maximum number of dimensions for arrays
 const int CHARTS_META_MAX_DIM = 8;

@@ -17,10 +17,21 @@ import argparse
 import numpy as np
 import h5py
 
-C_LIGHT = 299792458.0  # Speed of light [m/s]
+_test_charts_dir = os.path.dirname(os.path.abspath(__file__))
+if _test_charts_dir not in sys.path:
+    sys.path.insert(0, _test_charts_dir)
+
+from constants import (
+    C_LIGHT,
+    DEFAULT_SPACING_M,
+    LOCAL_FREQUENCY_CHANNELS,
+    DEFAULT_FREQUENCY_START_MHZ,
+    CHARTS_CHANNEL_WIDTH_MHZ,
+    FPGA_TIME_RESOLUTION_US,
+)
 
 
-def get_antenna_positions(num_antennas: int, spacing_m: float = 0.6):
+def get_antenna_positions(num_antennas: int, spacing_m: float = DEFAULT_SPACING_M):
     """
     Computes (x, y) physical coordinates for 64 (8x8) or 256 (16x16) array.
     """
@@ -38,12 +49,12 @@ def get_antenna_positions(num_antennas: int, spacing_m: float = 0.6):
 
 def generate_fengine_data(
     num_antennas: int = 64,
-    num_freq: int = 336,
+    num_freq: int = LOCAL_FREQUENCY_CHANNELS,
     num_time: int = 15360,
-    freq_start_mhz: float = 300.0,
-    delta_freq_mhz: float = 0.3,
-    delta_time_us: float = 3.2552,
-    spacing_m: float = 0.6,
+    freq_start_mhz: float = DEFAULT_FREQUENCY_START_MHZ,
+    delta_freq_mhz: float = CHARTS_CHANNEL_WIDTH_MHZ,
+    delta_time_us: float = FPGA_TIME_RESOLUTION_US,
+    spacing_m: float = DEFAULT_SPACING_M,
     scenario: str = "zenith",
     noise_amp: float = 0.5,
     source_amp: float = 3.0,
@@ -191,7 +202,8 @@ def save_to_hdf5(filepath: str, packed_data: np.ndarray, freqs_hz: np.ndarray, m
     n_time, n_freq, n_ant = packed_data.shape
 
     # Transpose from [Time, Freq, Antenna] to [Antenna, Freq, Time] for standard HDF5 baseband dataset
-    h5_array = np.transpose(packed_data, (2, 1, 0))
+    if h5py is None:
+        raise ImportError("h5py is required to save HDF5 format. Install via: pip install h5py")
 
     with h5py.File(filepath, "w") as f:
         # File attributes

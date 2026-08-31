@@ -13,9 +13,19 @@ import time
 import argparse
 import numpy as np
 import h5py
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+_test_charts_dir = os.path.dirname(os.path.abspath(__file__))
+if _test_charts_dir not in sys.path:
+    sys.path.insert(0, _test_charts_dir)
+
+from constants import (
+    C_LIGHT,
+    DEFAULT_SPACING_M,
+    DEFAULT_FREQUENCY_START_MHZ,
+    CHARTS_CHANNEL_WIDTH_MHZ,
+    FPGA_TIME_RESOLUTION_US,
+)
 
 # ============================================================================
 # 4-bit Complex Data Handling
@@ -150,9 +160,9 @@ def main():
         n_freq_file = full_shape[1]
         n_time_file = full_shape[2]
 
-        freq_start_mhz = float(f.attrs.get("freq_start_MHz", 300.0))
-        delta_freq_mhz = float(f.attrs.get("delta_freq_MHz", 0.3))
-        delta_time_us = float(f.attrs.get("delta_time_us", 3.2552))
+        freq_start_mhz = float(f.attrs.get("freq_start_MHz", DEFAULT_FREQUENCY_START_MHZ))
+        delta_freq_mhz = float(f.attrs.get("delta_freq_MHz", CHARTS_CHANNEL_WIDTH_MHZ))
+        delta_time_us = float(f.attrs.get("delta_time_us", FPGA_TIME_RESOLUTION_US))
 
         n_time = min(args.n_time, n_time_file) if args.n_time > 0 else n_time_file
         n_freq = min(args.n_freq_max, n_freq_file)

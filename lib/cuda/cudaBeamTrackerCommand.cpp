@@ -38,46 +38,53 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
 
     _max_beams = config.get_default<int>(unique_name, "max_beams", 1);
     _integration_spectra = config.get_default<int>(unique_name, "integration_spectra", 320);
-    _spacing_m = config.get_default<float>(unique_name, "spacing_m", 0.6f);
+    _spacing_m = config.get_default<float>(unique_name, "spacing_m", charts::constants::charts_default_spacing_m);
 
-    _sample_period_s = config.get_default<double>(unique_name, "sample_period_s", 2.56e-6);
+    _sample_period_s = config.get_default<double>(unique_name, "sample_period_s", charts::constants::fpga_time_resolution_s);
 
     _gpu_mem_voltage = config.get_default<std::string>(unique_name, "gpu_mem_voltage", "voltage");
     // Support either "formed_beams" or backward-compatible "intensity" name
     _gpu_mem_formed_beams = config.get_default<std::string>(unique_name, "gpu_mem_formed_beams",
                                 config.get_default<std::string>(unique_name, "gpu_mem_intensity", "formed_beams"));
 
-    const double site_lat_deg = config.get_default<double>(unique_name, "site_lat_deg", 49.3208);
-    const double site_lon_deg = config.get_default<double>(unique_name, "site_lon_deg", -119.6237);
-    const double site_alt_m = config.get_default<double>(unique_name, "site_alt_m", 545.0);
-
-    const float l0 = config.get_default<float>(unique_name, "source_l0", 0.0f);
-    const float m0 = config.get_default<float>(unique_name, "source_m0", 0.0f);
-    const float dl = config.get_default<float>(unique_name, "source_dl", 0.0f);
-    const float dm = config.get_default<float>(unique_name, "source_dm", 0.0f);
-
-    const float trans_sq = l0 * l0 + m0 * m0;
-    const float n0 = (trans_sq <= 1.0f) ? std::sqrt(1.0f - trans_sq) : 0.0f;
+    const double site_lat_deg = config.get_default<double>(unique_name, "site_lat_deg", charts::constants::charts_caren_lat_deg);
+    const double site_lon_deg = config.get_default<double>(unique_name, "site_lon_deg", charts::constants::charts_caren_lon_deg);
+    const double site_alt_m = config.get_default<double>(unique_name, "site_alt_m", charts::constants::charts_caren_alt_m);
 
     {
         std::lock_guard<std::mutex> lock(_global_mutex);
         _shared_config.site = SiteLocation{site_lat_deg, site_lon_deg, site_alt_m};
         _shared_config.num_active_beams = config.get_default<int>(unique_name, "initial_active_beams", 1);
-        _shared_config.trajectories[0].direction_start = Direction3D{l0, m0, n0};
-        _shared_config.trajectories[0].direction_rate_per_sample = DirectionRate2D{dl, dm};
-        _shared_config.integration_spectra = static_cast<std::size_t>(_integration_spectra);
-        _shared_config.spacing_m = _spacing_m;
-        _shared_config.time_chunk_size = static_cast<std::size_t>(config.get_default<int>(unique_name, "time_chunk_size", 80));
-        _shared_config.time_unroll = static_cast<std::size_t>(config.get_default<int>(unique_name, "time_unroll", 8));
-        _shared_config.enable_cuda_graph = config.get_default<bool>(unique_name, "enable_cuda_graph", false);
+        // Initialize trajectories for each beam slot (0..MAX_TRACKER_BEAMS-1)
+        for (std::size_t b = 0; b < MAX_TRACKER_BEAMS; ++b) {
+            std::string l0_key = (b == 0) ? "source_l0" : fmt::format("source_l0_{:d}", b);
+            std::string m0_key = (b == 0) ? "source_m0" : fmt::format("source_m0_{:d}", b);
+            std::string dl_key = (b == 0) ? "source_dl" : fmt::format("source_dl_{:d}", b);
+            std::string dm_key = (b == 0) ? "source_dm" : fmt::format("source_dm_{:d}", b);
 
-        // Optional initial celestial target (RA/Dec) in YAML
-        if (config.exists(unique_name, "source_ra_deg") && config.exists(unique_name, "source_dec_deg")) {
-            const double ra_deg = config.get<double>(unique_name, "source_ra_deg");
-            const double dec_deg = config.get<double>(unique_name, "source_dec_deg");
-            const double lst_hours = config.get_default<double>(unique_name, "initial_lst_hours", 0.0);
-            compute_celestial_trajectory(ra_deg, dec_deg, lst_hours, site_lat_deg, _sample_period_s, _shared_config.trajectories[0]);
-            INFO_NON_OO("Beam Tracker: Initialized beam 0 celestial target RA={:.4f}°, Dec={:.4f}°", ra_deg, dec_deg);
+            const float b_l0 = config.get_default<float>(unique_name, l0_key, 0.0f);
+            const float b_m0 = config.get_default<float>(unique_name, m0_key, 0.0f);
+            const float b_dl = config.get_default<float>(unique_name, dl_key, 0.0f);
+            const float b_dm = config.get_default<float>(unique_name, dm_key, 0.0f);
+
+            const float b_trans_sq = b_l0 * b_l0 + b_m0 * b_m0;
+            const float b_n0 = (b_trans_sq <= 1.0f) ? std::sqrt(1.0f - b_trans_sq) : 0.0f;
+
+            _shared_config.trajectories[b].direction_start = Direction3D{b_l0, b_m0, b_n0};
+            _shared_config.trajectories[b].direction_rate_per_sample = DirectionRate2D{b_dl, b_dm};
+
+            // Optional celestial target for beam b
+            std::string ra_key = (b == 0) ? "source_ra_deg" : fmt::format("source_ra_deg_{:d}", b);
+            std::string dec_key = (b == 0) ? "source_dec_deg" : fmt::format("source_dec_deg_{:d}", b);
+            std::string lst_key = (b == 0) ? "initial_lst_hours" : fmt::format("initial_lst_hours_{:d}", b);
+
+            if (config.exists(unique_name, ra_key) && config.exists(unique_name, dec_key)) {
+                const double ra_deg = config.get<double>(unique_name, ra_key);
+                const double dec_deg = config.get<double>(unique_name, dec_key);
+                const double lst_hours = config.get_default<double>(unique_name, lst_key, 0.0);
+                compute_celestial_trajectory(ra_deg, dec_deg, lst_hours, site_lat_deg, _sample_period_s, _shared_config.trajectories[b]);
+                INFO_NON_OO("Beam Tracker: Initialized beam {:d} celestial target RA={:.4f}°, Dec={:.4f}°", b, ra_deg, dec_deg);
+            }
         }
 
         // Load pre-configured bad / dead antenna elements if specified in YAML
@@ -103,10 +110,17 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
                     }
 
                     std::lock_guard<std::mutex> lk(_global_mutex);
-                    if (j.contains("source_l0")) _shared_config.trajectories[beam_id].direction_start.x = j["source_l0"];
-                    if (j.contains("source_m0")) _shared_config.trajectories[beam_id].direction_start.y = j["source_m0"];
-                    if (j.contains("source_dl")) _shared_config.trajectories[beam_id].direction_rate_per_sample.dl = j["source_dl"];
-                    if (j.contains("source_dm")) _shared_config.trajectories[beam_id].direction_rate_per_sample.dm = j["source_dm"];
+                    if (j.contains("l0")) _shared_config.trajectories[beam_id].direction_start.x = j["l0"];
+                    else if (j.contains("source_l0")) _shared_config.trajectories[beam_id].direction_start.x = j["source_l0"];
+
+                    if (j.contains("m0")) _shared_config.trajectories[beam_id].direction_start.y = j["m0"];
+                    else if (j.contains("source_m0")) _shared_config.trajectories[beam_id].direction_start.y = j["source_m0"];
+
+                    if (j.contains("dl")) _shared_config.trajectories[beam_id].direction_rate_per_sample.dl = j["dl"];
+                    else if (j.contains("source_dl")) _shared_config.trajectories[beam_id].direction_rate_per_sample.dl = j["source_dl"];
+
+                    if (j.contains("dm")) _shared_config.trajectories[beam_id].direction_rate_per_sample.dm = j["dm"];
+                    else if (j.contains("source_dm")) _shared_config.trajectories[beam_id].direction_rate_per_sample.dm = j["source_dm"];
 
                     const float lx = _shared_config.trajectories[beam_id].direction_start.x;
                     const float my = _shared_config.trajectories[beam_id].direction_start.y;
@@ -249,24 +263,42 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
                     }
                 }
                 reply["num_active_antennas"] = active_ant_count;
+                reply["active_antennas"] = active_ant_count;
+                reply["masked_antennas"] = bad_elems.size();
                 reply["bad_elements"] = bad_elems;
 
                 reply["beams"] = nlohmann::json::array();
-                for (std::size_t b = 0; b < _shared_config.num_active_beams; ++b) {
+                reply["trajectories"] = nlohmann::json::array();
+                for (std::size_t b = 0; b < MAX_TRACKER_BEAMS; ++b) {
                     nlohmann::json b_info;
                     b_info["beam_id"] = b;
-                    b_info["source_l0"] = _shared_config.trajectories[b].direction_start.x;
-                    b_info["source_m0"] = _shared_config.trajectories[b].direction_start.y;
-                    b_info["source_n0"] = _shared_config.trajectories[b].direction_start.z;
-                    b_info["source_dl"] = _shared_config.trajectories[b].direction_rate_per_sample.dl;
-                    b_info["source_dm"] = _shared_config.trajectories[b].direction_rate_per_sample.dm;
+                    b_info["l0"] = _shared_config.trajectories[b].direction_start.x;
+                    b_info["m0"] = _shared_config.trajectories[b].direction_start.y;
+                    b_info["n0"] = _shared_config.trajectories[b].direction_start.z;
+                    b_info["dl"] = _shared_config.trajectories[b].direction_rate_per_sample.dl;
+                    b_info["dm"] = _shared_config.trajectories[b].direction_rate_per_sample.dm;
+                    b_info["source_l0"] = b_info["l0"];
+                    b_info["source_m0"] = b_info["m0"];
+                    b_info["source_n0"] = b_info["n0"];
+                    b_info["source_dl"] = b_info["dl"];
+                    b_info["source_dm"] = b_info["dm"];
                     if (_shared_config.trajectories[b].celestial_target.is_set) {
                         b_info["celestial_target"] = {
+                            {"is_set", true},
                             {"ra_deg", _shared_config.trajectories[b].celestial_target.ra_deg},
                             {"dec_deg", _shared_config.trajectories[b].celestial_target.dec_deg}
                         };
+                    } else {
+                        b_info["celestial_target"] = {
+                            {"is_set", false},
+                            {"ra_deg", 0.0},
+                            {"dec_deg", 0.0}
+                        };
                     }
-                    reply["beams"].push_back(b_info);
+                    reply["trajectories"].push_back(b_info);
+                    if (b < _shared_config.num_active_beams) {
+                        reply["beams"].push_back(b_info);
+                    }
                 }
                 conn.send_json_reply(reply);
             });
@@ -310,15 +342,21 @@ cudaEvent_t cudaBeamTrackerCommand::execute(
                                     static_cast<std::size_t>(_num_local_freq) *
                                     static_cast<std::size_t>(_samples_per_data_set) *
                                     sizeof(int4x2_t);
-    void* input_memory = device.get_gpu_memory_array(_gpu_mem_voltage, pipestate.gpu_frame_id,
+    void* input_memory = device.get_gpu_memory_array(_gpu_mem_voltage, gpu_frame_id,
                                                      _gpu_buffer_depth, input_bytes);
 
     const std::size_t output_bytes = static_cast<std::size_t>(_num_local_freq) *
                                      static_cast<std::size_t>(_samples_per_data_set) *
                                      static_cast<std::size_t>(_max_beams) *
                                      sizeof(float2);
-    void* output_memory = device.get_gpu_memory_array(_gpu_mem_formed_beams, pipestate.gpu_frame_id,
+    void* output_memory = device.get_gpu_memory_array(_gpu_mem_formed_beams, gpu_frame_id,
                                                       _gpu_buffer_depth, output_bytes);
+
+    // Propagate metadata if available
+    std::shared_ptr<metadataObject> meta = device.get_gpu_memory_array_metadata(_gpu_mem_voltage, gpu_frame_id);
+    if (meta) {
+        device.claim_gpu_memory_array_metadata(_gpu_mem_formed_beams, gpu_frame_id, meta);
+    }
 
     record_start_event();
 

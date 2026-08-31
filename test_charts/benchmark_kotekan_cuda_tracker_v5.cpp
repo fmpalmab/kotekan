@@ -12,12 +12,14 @@
 #include <vector>
 #include <iomanip>
 
+#include "chartsConstants.hpp"
+
 namespace {
 
 using Clock = std::chrono::steady_clock;
 
-constexpr double speed_of_light = 299792458.0;
-constexpr double two_pi = 2.0 * M_PI;
+constexpr double speed_of_light = kotekan::charts::constants::speed_of_light_m_per_s;
+constexpr double two_pi = kotekan::charts::constants::two_pi;
 
 // Helper to create synthetic 4-bit packed data
 std::vector<kotekan::int4x2_t> generate_synthetic_data(

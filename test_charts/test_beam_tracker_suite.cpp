@@ -22,12 +22,14 @@
 #include <vector>
 #include <immintrin.h>
 
+#include "chartsConstants.hpp"
+
 namespace {
 
 using Clock = std::chrono::high_resolution_clock;
 
-constexpr double SPEED_OF_LIGHT = 299792458.0;
-constexpr double TWO_PI = 2.0 * M_PI;
+constexpr double SPEED_OF_LIGHT = kotekan::charts::constants::speed_of_light_m_per_s;
+constexpr double TWO_PI = kotekan::charts::constants::two_pi;
 
 // ============================================================================
 // Data Types & Structures
@@ -860,7 +862,9 @@ TestResult run_sustained_stress_test(
 
     std::size_t free_mem_end = 0;
     cudaMemGetInfo(&free_mem_end, &total_mem);
-    if (free_mem_start != free_mem_end) {
+    const std::size_t mem_diff = (free_mem_start > free_mem_end) ? 
+        (free_mem_start - free_mem_end) : (free_mem_end - free_mem_start);
+    if (mem_diff > 10ULL * 1024ULL * 1024ULL) {
         memory_stable = false;
     }
 

@@ -45,6 +45,8 @@ rawFileRead::rawFileRead(Config& config, const std::string& unique_name,
 
     // Interrupt Kotekan if run out of files to read.
     end_interrupt = config.get_default<bool>(unique_name, "end_interrupt", false);
+    loop_files = config.get_default<bool>(unique_name, "loop_files", false);
+    max_repeats = config.get_default<int>(unique_name, "max_repeats", -1);
 }
 
 rawFileRead::~rawFileRead() {}
@@ -52,6 +54,7 @@ rawFileRead::~rawFileRead() {}
 void rawFileRead::main_thread() {
 
     int file_num = 0;
+    int repeats_done = 0;
     int frame_id = 0;
     uint8_t* frame = nullptr;
     char hostname[64];
@@ -72,6 +75,12 @@ void rawFileRead::main_thread() {
 
         INFO("Looking for file: {:s}", full_path);
         if (!file_exists(full_path)) {
+            if (loop_files && file_num > 0 && (max_repeats < 0 || repeats_done < max_repeats)) {
+                repeats_done++;
+                file_num = 0;
+                INFO("rawFileRead: Loop repeat {:d}/{:d}, rewinding to file 0.", repeats_done, max_repeats);
+                continue;
+            }
             // Interrupt Kotekan if run out of files to read.
             if (end_interrupt) {
                 sleep(1);

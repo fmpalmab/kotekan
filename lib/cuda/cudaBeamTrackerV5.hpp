@@ -11,10 +11,12 @@
 #include <vector>
 #include <cuda_runtime.h>
 
+#include "chartsConstants.hpp"
+
 namespace kotekan {
 
 constexpr std::size_t MAX_TRACKER_BEAMS = 8;
-constexpr std::size_t MAX_TRACKER_ANTENNAS = 256;
+constexpr std::size_t MAX_TRACKER_ANTENNAS = charts::constants::charts_total_antennas;
 
 // 3D vector for directions
 struct Direction3D {
@@ -36,11 +38,11 @@ struct CelestialTarget {
     bool is_set = false;
 };
 
-// Telescope geographic site location
+// Telescope geographic site location (defaults to CHARTS Carén site)
 struct SiteLocation {
-    double lat_deg = 49.3208;   // Latitude (degrees)
-    double lon_deg = -119.6237; // Longitude (degrees)
-    double alt_m = 545.0;       // Altitude (meters)
+    double lat_deg = charts::constants::charts_caren_lat_deg;   // Latitude (degrees)
+    double lon_deg = charts::constants::charts_caren_lon_deg; // Longitude (degrees)
+    double alt_m = charts::constants::charts_caren_alt_m;       // Altitude (meters)
 };
 
 // Trajectory definition
@@ -54,7 +56,7 @@ struct BeamTrackerTrajectory {
 struct BeamTrackerConfig {
     BeamTrackerTrajectory trajectory;
     std::size_t integration_spectra = 320;
-    float spacing_m = 0.6f;
+    float spacing_m = charts::constants::charts_default_spacing_m;
     std::size_t time_chunk_size = 80;
     std::size_t time_unroll = 8; // 2, 4, or 8
     bool enable_cuda_graph = false;
@@ -68,7 +70,7 @@ struct MultiBeamTrackerConfig {
     std::size_t num_active_beams = 1;
     std::array<BeamTrackerTrajectory, MAX_TRACKER_BEAMS> trajectories;
     std::size_t integration_spectra = 320;
-    float spacing_m = 0.6f;
+    float spacing_m = charts::constants::charts_default_spacing_m;
     std::size_t time_chunk_size = 80;
     std::size_t time_unroll = 8;
     bool enable_cuda_graph = false;

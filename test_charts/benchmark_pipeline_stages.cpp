@@ -17,6 +17,8 @@
 #include <vector>
 #include <immintrin.h>
 
+#include "chartsConstants.hpp"
+
 namespace {
 
 using Clock = std::chrono::high_resolution_clock;
@@ -115,7 +117,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
     kotekan::MultiBeamTrackerConfig config;
     config.integration_spectra = 320;
-    config.spacing_m = 0.6f;
+    config.spacing_m = kotekan::charts::constants::charts_default_spacing_m;
     config.time_chunk_size = 80;
     config.time_unroll = 8;
 
@@ -126,7 +128,7 @@ int main(int /*argc*/, char** /*argv*/) {
 
     std::vector<double> freqs(n_freq);
     for (std::size_t f = 0; f < n_freq; ++f) {
-        freqs[f] = 300.0e6 + f * 300.0e3;
+        freqs[f] = kotekan::charts::constants::charts_frequency_start_hz + f * kotekan::charts::constants::charts_channel_width_hz;
     }
 
     // Benchmark across dynamic beam counts: 0, 1, 2, 4
