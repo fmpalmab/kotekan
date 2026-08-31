@@ -28,6 +28,15 @@ cmake --version | head -n 1
 python3 --version | head -n 1
 nvidia-smi
 
+# Ensure required python dependencies for Kotekan config parser and tests
+export PATH="$HOME/.local/bin:$PATH"
+export PYTHONPATH="$HOME/.local/lib/python3.10/site-packages:${PYTHONPATH:-}"
+
+if ! python3 -c "import yaml, jinja2, future, numpy, h5py, matplotlib" 2>/dev/null; then
+    echo "Installing missing python runtime packages (pyyaml, jinja2, future, numpy, h5py, matplotlib)..."
+    pip install --user --no-cache-dir pyyaml jinja2 future numpy h5py matplotlib || true
+fi
+
 REPO_ROOT="${SLURM_SUBMIT_DIR:-/scratch/ferpb/kotekan}"
 cd "${REPO_ROOT}"
 
