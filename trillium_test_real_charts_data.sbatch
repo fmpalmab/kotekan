@@ -24,17 +24,20 @@ module load cuda/13.3 2>/dev/null || module load cuda/12.6 2>/dev/null || module
 module load cmake 2>/dev/null || true
 module load python/3.10 2>/dev/null || module load python || true
 
-# 2. Paths
+# 2. Paths & Environment
+REPO_ROOT="${SLURM_SUBMIT_DIR:-/scratch/ferpb/kotekan}"
+cd "${REPO_ROOT}"
+
 DATA_DIR="/scratch/ferpb/260816T013722Z_CHARTS_hdf5"
 SINGLE_CHUNK="${DATA_DIR}/bb_f0000_0084_chunk00000.h5"
 VIRTUAL_DATASET="${DATA_DIR}/baseband_virtual.h5"
+BENCHMARK_SCRIPT="${REPO_ROOT}/test_charts/benchmark_beam_tracker_hdf5.py"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BENCHMARK_SCRIPT="${SCRIPT_DIR}/test_charts/benchmark_beam_tracker_hdf5.py"
-
+echo "Working Dir     : ${REPO_ROOT}"
 echo "Data Directory  : ${DATA_DIR}"
 echo "Target Single   : ${SINGLE_CHUNK}"
 echo "Target Virtual  : ${VIRTUAL_DATASET}"
+echo "Benchmark Script: ${BENCHMARK_SCRIPT}"
 
 # 3. Test on 1 Dump of Single Frequency Chunk (f0000 to f0084)
 echo "======================================================================"

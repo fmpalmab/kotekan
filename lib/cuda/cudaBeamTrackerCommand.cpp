@@ -72,7 +72,7 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
         _shared_config.enable_cuda_graph = config.get_default<bool>(unique_name, "enable_cuda_graph", false);
 
         // Optional initial celestial target (RA/Dec) in YAML
-        if (config.has(unique_name, "source_ra_deg") && config.has(unique_name, "source_dec_deg")) {
+        if (config.exists(unique_name, "source_ra_deg") && config.exists(unique_name, "source_dec_deg")) {
             const double ra_deg = config.get<double>(unique_name, "source_ra_deg");
             const double dec_deg = config.get<double>(unique_name, "source_dec_deg");
             const double lst_hours = config.get_default<double>(unique_name, "initial_lst_hours", 0.0);

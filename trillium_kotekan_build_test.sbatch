@@ -26,6 +26,9 @@ cmake --version | head -n 1
 python3 --version | head -n 1
 nvidia-smi
 
+REPO_ROOT="${SLURM_SUBMIT_DIR:-/scratch/ferpb/kotekan}"
+cd "${REPO_ROOT}"
+
 echo "========================================="
 echo " 1. Building Kotekan Framework & Tests"
 echo "========================================="
