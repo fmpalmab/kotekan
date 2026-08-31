@@ -23,6 +23,14 @@ module load gcc/12.3 2>/dev/null || module load gcc || true
 module load cuda/13.3 2>/dev/null || module load cuda/12.6 2>/dev/null || module load cuda || true
 module load cmake 2>/dev/null || true
 module load python/3.10 2>/dev/null || module load python || true
+module load scipy-stack 2>/dev/null || true
+module load hdf5 2>/dev/null || true
+
+# Verify Python packages
+if ! python3 -c "import numpy, h5py, matplotlib" 2>/dev/null; then
+    echo "Python scientific stack missing in module, installing locally..."
+    pip install --user --no-cache-dir numpy h5py matplotlib || true
+fi
 
 # 2. Paths & Environment
 REPO_ROOT="${SLURM_SUBMIT_DIR:-/scratch/ferpb/kotekan}"

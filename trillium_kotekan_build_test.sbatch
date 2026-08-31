@@ -18,6 +18,8 @@ module load cuda/13.3 2>/dev/null || module load cuda/12.6 2>/dev/null || module
 module load cmake 2>/dev/null || true
 module load boost 2>/dev/null || true
 module load python/3.10 2>/dev/null || module load python || true
+module load scipy-stack 2>/dev/null || true
+module load hdf5 2>/dev/null || true
 
 echo "=== Loaded Compilers & Environment ==="
 gcc --version | head -n 1
