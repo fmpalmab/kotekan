@@ -342,7 +342,7 @@ def render_ascii_spectrum(
     db_values: np.ndarray,
     height: int = 10,
     width: int = 60,
-    freq_start_mhz: float = 1350.0,
+    freq_start_mhz: float = 300.0,
     freq_step_mhz: float = 0.3,
 ) -> str:
     """Render a 2D ASCII power spectrum graph (dB vs Frequency Bins)."""
@@ -390,7 +390,7 @@ def render_ascii_spectrum(
 def render_horizontal_spectrum(
     db_values: np.ndarray,
     n_bands: int = 16,
-    freq_start_mhz: float = 1350.0,
+    freq_start_mhz: float = 300.0,
     freq_step_mhz: float = 0.3,
 ) -> str:
     """Render horizontal ASCII power breakdown by frequency sub-bands."""
@@ -442,6 +442,8 @@ def spectrum_loop(
     width: int = 60,
     horizontal: bool = False,
     once: bool = False,
+    freq_start_mhz: float = 300.0,
+    freq_step_mhz: float = 0.3,
 ):
     """Continuously poll formed beams and display ASCII spectrum with dB and frequency bins."""
     try:
@@ -486,8 +488,6 @@ def spectrum_loop(
                 mean_db = float(np.mean(db_per_freq))
                 min_db = float(np.min(db_per_freq))
 
-                freq_start_mhz = 1350.0
-                freq_step_mhz = 0.3
                 peak_freq_mhz = freq_start_mhz + peak_bin * freq_step_mhz
 
                 if not once:
@@ -656,6 +656,8 @@ def main():
     p_spec.add_argument("--width", type=int, default=60, help="Graph width in columns (default: 60)")
     p_spec.add_argument("--horizontal", action="store_true", help="Also display horizontal frequency sub-band table")
     p_spec.add_argument("--once", action="store_true", help="Print single snapshot and exit")
+    p_spec.add_argument("--freq-start", type=float, default=300.0, help="Band start frequency in MHz (default: 300.0)")
+    p_spec.add_argument("--freq-step", type=float, default=0.3, help="Channel width in MHz (default: 0.3)")
     p_spec.add_argument("--buffer", type=str, default="host_formed_beams_buffer", help="Buffer name to inspect")
 
     # Interactive command
@@ -698,6 +700,8 @@ def main():
             width=args.width,
             horizontal=args.horizontal,
             once=args.once,
+            freq_start_mhz=args.freq_start,
+            freq_step_mhz=args.freq_step,
         )
     elif args.command == "interactive":
         interactive_mode(client)
