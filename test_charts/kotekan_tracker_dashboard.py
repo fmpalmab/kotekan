@@ -74,20 +74,39 @@ BEAM_COLORS = [
 # Load site baseband snapshot into memory for fast live output rendering
 DEFAULT_H5_PATH = get_default_charts_h5_path()
 GLOBAL_RAW_VOLTAGES = None
-if DEFAULT_H5_PATH.exists():
+if DEFAULT_H5_PATH.exists() and h5py.is_hdf5(DEFAULT_H5_PATH):
     try:
         with h5py.File(DEFAULT_H5_PATH, "r") as f:
-            dset = f["baseband"]
-            # Cache 8 active antennas x 84 frequencies x 3072 time samples (~10.2 ms)
-            n_time_cache = min(3072, dset.shape[2])
-            raw_slice = dset[:8, :84, :n_time_cache]
-            GLOBAL_RAW_VOLTAGES = unpack_4bit_complex(raw_slice)
+            if "baseband" in f:
+                dset = f["baseband"]
+                # Cache 8 active antennas x 84 frequencies x 3072 time samples (~10.2 ms)
+                n_time_cache = min(3072, dset.shape[2])
+                raw_slice = dset[:8, :84, :n_time_cache]
+                GLOBAL_RAW_VOLTAGES = unpack_4bit_complex(raw_slice)
     except Exception as e:
         print(f"[WARN] Failed to load HDF5 baseband cache: {e}")
 
 if GLOBAL_RAW_VOLTAGES is None:
+    # Check if a continuous replay binary buffer exists
+    bin_replay = Path("/tmp/kotekan_continuous_tracker/input/window_replay_0000000.bin")
+    if bin_replay.exists():
+        try:
+            with open(bin_replay, "rb") as f:
+                f.seek(4)  # Skip 4-byte uint32 metadata header
+                data = f.read(3072 * 16 * 8)
+                if len(data) >= 3072 * 16 * 8:
+                    arr = np.frombuffer(data[: 3072 * 16 * 8], dtype=np.uint8)
+                    arr = arr.reshape((3072, 16, 8))
+                    unpacked = unpack_4bit_complex(arr)
+                    unpacked = np.transpose(unpacked, (2, 1, 0))  # (ant, freq, time)
+                    GLOBAL_RAW_VOLTAGES = np.repeat(unpacked, 6, axis=1)[:, :84, :]
+        except Exception:
+            pass
+
+if GLOBAL_RAW_VOLTAGES is None:
     # Synthetic default buffer
     GLOBAL_RAW_VOLTAGES = (np.random.randn(8, 84, 3072) + 1j * np.random.randn(8, 84, 3072)).astype(np.complex64)
+
 
 
 def create_app(rest_host: str = "127.0.0.1", rest_port: int = 12048) -> dash.Dash:

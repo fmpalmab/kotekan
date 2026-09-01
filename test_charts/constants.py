@@ -182,7 +182,6 @@ def get_default_charts_h5_path() -> Path:
         _kotekan_root / "data" / "260816T013722Z_CHARTS_hdf5" / "baseband_virtual.h5",
         Path.home() / "charts" / "data" / "260816T013722Z_CHARTS_hdf5" / "baseband_virtual.h5",
         Path.home() / "fpalma" / "charts" / "data" / "260816T013722Z_CHARTS_hdf5" / "baseband_virtual.h5",
-        Path("/tmp/kotekan_continuous_tracker/input/window_replay_0000000.bin"),
     ]
     for c in candidates:
         if c.exists():
