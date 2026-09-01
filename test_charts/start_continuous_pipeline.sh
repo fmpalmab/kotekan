@@ -7,7 +7,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KOTEKAN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 KOTEKAN_BIN="${KOTEKAN_ROOT}/build/kotekan/kotekan"
-PYTHON_BIN="/home/fernando/charts/beamform_project/.venv/bin/python"
+if [ -z "${PYTHON_BIN:-}" ]; then
+    if [ -f "${KOTEKAN_ROOT}/.venv/bin/python" ]; then
+        PYTHON_BIN="${KOTEKAN_ROOT}/.venv/bin/python"
+    elif [ -f "${KOTEKAN_ROOT}/.venv/Scripts/python.exe" ]; then
+        PYTHON_BIN="${KOTEKAN_ROOT}/.venv/Scripts/python.exe"
+    else
+        PYTHON_BIN="$(which python3 2>/dev/null || which python 2>/dev/null || echo "python")"
+    fi
+fi
 
 PORT="${KOTEKAN_REST_PORT:-12048}"
 WORK_DIR="/tmp/kotekan_continuous_tracker"
