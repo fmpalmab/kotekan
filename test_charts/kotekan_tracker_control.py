@@ -338,6 +338,197 @@ def stream_loop(client: KotekanTrackerClient, buffer_name: str = "host_formed_be
         print("\nExiting stream monitor.")
 
 
+def render_ascii_spectrum(
+    db_values: np.ndarray,
+    height: int = 10,
+    width: int = 60,
+    freq_start_mhz: float = 1350.0,
+    freq_step_mhz: float = 0.3,
+) -> str:
+    """Render a 2D ASCII power spectrum graph (dB vs Frequency Bins)."""
+    n = len(db_values)
+    width = min(width, n)
+    indices = np.linspace(0, n - 1, width).astype(int)
+    vals = np.array(db_values)[indices]
+
+    max_db = float(np.max(vals))
+    min_db = float(max(np.min(vals), max_db - 35.0))
+    if max_db - min_db < 1.0:
+        min_db = max_db - 10.0
+
+    lines = []
+    lines.append("   dB |" + " " * width)
+
+    db_step = (max_db - min_db) / max(1, height)
+    for row in range(height, -1, -1):
+        level_db = min_db + row * db_step
+        row_chars = []
+        for v in vals:
+            h = (v - min_db) / (max_db - min_db) * height
+            if h >= row:
+                row_chars.append("█")
+            elif h >= row - 0.5:
+                row_chars.append("▄")
+            else:
+                row_chars.append(" ")
+        lines.append(f"{level_db:5.1f} |" + "".join(row_chars))
+
+    lines.append("      +" + "-" * width + ">")
+
+    # Tick marks for frequency and bins
+    f_end_mhz = freq_start_mhz + n * freq_step_mhz
+    f_mid_mhz = 0.5 * (freq_start_mhz + f_end_mhz)
+    b_mid = n // 2
+
+    tick_line = f"  Bin: 0" + f"{b_mid}".center(width - 8) + f"{n-1}"
+    freq_line = f"  MHz: {freq_start_mhz:.0f}" + f"{f_mid_mhz:.1f} MHz".center(width - 16) + f"{f_end_mhz:.0f}"
+    lines.append(tick_line)
+    lines.append(freq_line)
+    return "\n".join(lines)
+
+
+def render_horizontal_spectrum(
+    db_values: np.ndarray,
+    n_bands: int = 16,
+    freq_start_mhz: float = 1350.0,
+    freq_step_mhz: float = 0.3,
+) -> str:
+    """Render horizontal ASCII power breakdown by frequency sub-bands."""
+    n = len(db_values)
+    band_size = n // n_bands
+    lines = []
+    lines.append("  " + "-" * 72)
+    lines.append(f"  {'Bin Range':<15} {'Center Freq':<14} {'Power (dB)':<12} {'ASCII Power Bar'}")
+    lines.append("  " + "-" * 72)
+
+    max_db = float(np.max(db_values))
+    min_db = float(max(np.min(db_values), max_db - 35.0))
+    if max_db - min_db < 1.0:
+        min_db = max_db - 10.0
+
+    peak_band_idx = -1
+    highest_band_p = -1e9
+    band_records = []
+
+    for b in range(n_bands):
+        b_start = b * band_size
+        b_end = (b + 1) * band_size if b < n_bands - 1 else n
+        sub_vals = db_values[b_start:b_end]
+        mean_p = float(np.mean(sub_vals))
+        f_center = freq_start_mhz + (b_start + b_end) * 0.5 * freq_step_mhz
+        band_records.append((b_start, b_end - 1, f_center, mean_p))
+        if mean_p > highest_band_p:
+            highest_band_p = mean_p
+            peak_band_idx = b
+
+    for idx, (b0, b1, fc, p_db) in enumerate(band_records):
+        norm = (p_db - min_db) / (max_db - min_db)
+        bar_len = 24
+        filled = min(bar_len, max(0, int(norm * bar_len)))
+        bar = "█" * filled + "░" * (bar_len - filled)
+        tag = " [PEAK]" if idx == peak_band_idx else ""
+        lines.append(f"  Bin {b0:03d}..{b1:03d}     [{fc:6.1f} MHz]    {p_db:6.1f} dB    | {bar}{tag}")
+
+    lines.append("  " + "-" * 72)
+    return "\n".join(lines)
+
+
+def spectrum_loop(
+    client: KotekanTrackerClient,
+    beam_id: int = 0,
+    buffer_name: str = "host_formed_beams_buffer",
+    interval_s: float = 1.0,
+    height: int = 10,
+    width: int = 60,
+    horizontal: bool = False,
+    once: bool = False,
+):
+    """Continuously poll formed beams and display ASCII spectrum with dB and frequency bins."""
+    try:
+        while True:
+            t0 = time.perf_counter()
+            try:
+                raw_data = client.get_inspect_frame(buffer_name)
+                t_fetch_ms = (time.perf_counter() - t0) * 1000.0
+
+                data = np.frombuffer(raw_data, dtype=np.complex64)
+                n_samples = len(data)
+
+                try:
+                    st = client.get_status()
+                    n_beams = st.get("num_active_beams", 4)
+                except Exception:
+                    n_beams = 4
+
+                if beam_id >= n_beams:
+                    beam_to_plot = 0
+                else:
+                    beam_to_plot = beam_id
+
+                # Data layout: [time, freq (672), max_beams (4)]
+                n_freq = 672
+                max_beams = 4
+                n_time = n_samples // (n_freq * max_beams)
+
+                if n_time > 0:
+                    reshaped = data[: n_time * n_freq * max_beams].reshape((n_time, n_freq, max_beams))
+                    beam_v = reshaped[:, :, beam_to_plot]
+                    power_per_freq = np.mean(np.abs(beam_v) ** 2, axis=0)
+                else:
+                    n_freq = min(n_samples // max(1, n_beams), 672)
+                    beam_slice = data[:n_freq]
+                    power_per_freq = np.abs(beam_slice) ** 2
+
+                db_per_freq = 10.0 * np.log10(power_per_freq + 1e-12)
+
+                peak_bin = int(np.argmax(db_per_freq))
+                peak_db = float(db_per_freq[peak_bin])
+                mean_db = float(np.mean(db_per_freq))
+                min_db = float(np.min(db_per_freq))
+
+                freq_start_mhz = 1350.0
+                freq_step_mhz = 0.3
+                peak_freq_mhz = freq_start_mhz + peak_bin * freq_step_mhz
+
+                if not once:
+                    os.system("clear" if os.name == "posix" else "cls")
+
+                now_str = time.strftime("%H:%M:%S")
+                print("=" * 80)
+                print(" CHARTS 32-ANTENNA BEAM TRACKER ASCII FREQUENCY SPECTRUM")
+                print(f" Time: {now_str} | Beam: {beam_to_plot} of {n_beams} active | Frame: {len(raw_data)/1024/1024:.2f} MB | Latency: {t_fetch_ms:.1f} ms")
+                print("=" * 80)
+
+                # Render 2D Vertical Spectrum Graph
+                print(render_ascii_spectrum(db_per_freq, height=height, width=width, freq_start_mhz=freq_start_mhz, freq_step_mhz=freq_step_mhz))
+
+                # Render Horizontal Table if requested
+                if horizontal:
+                    print()
+                    print(render_horizontal_spectrum(db_per_freq, n_bands=16, freq_start_mhz=freq_start_mhz, freq_step_mhz=freq_step_mhz))
+
+                print()
+                print(f"  [Summary] Peak Bin : {peak_bin:03d} ({peak_freq_mhz:6.1f} MHz) -> {peak_db:6.1f} dB")
+                print(f"            Mean/RMS : {mean_db:6.1f} dB | Floor: {min_db:6.1f} dB | Dynamic Range: {peak_db - min_db:5.1f} dB")
+                print("=" * 80)
+                if not once:
+                    print(" Press Ctrl+C to stop. Refreshing every {:.1f}s...".format(interval_s))
+
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    print(f"[{time.strftime('%H:%M:%S')}] Waiting for beam tracker formed beam frames... (HTTP 404)")
+                else:
+                    print(f"[ERROR] HTTP {e.code}: {e.reason}")
+            except Exception as e:
+                print(f"[{time.strftime('%H:%M:%S')}] Waiting for spectrum stream: {e}")
+
+            if once:
+                break
+            time.sleep(interval_s)
+    except KeyboardInterrupt:
+        print("\nExiting spectrum monitor.")
+
+
 def interactive_mode(client: KotekanTrackerClient):
     """Interactive steering prompt."""
     print("=" * 80)
@@ -457,6 +648,16 @@ def main():
     p_stream.add_argument("--interval", type=float, default=1.0, help="Poll interval in seconds (default: 1.0)")
     p_stream.add_argument("--buffer", type=str, default="host_formed_beams_buffer", help="Buffer name to inspect")
 
+    # Spectrum command
+    p_spec = subparsers.add_parser("spectrum", help="Display live ASCII frequency spectrum (dB vs frequency bins)")
+    p_spec.add_argument("--beam", type=int, default=0, help="Beam index to plot (default: 0)")
+    p_spec.add_argument("--interval", type=float, default=1.0, help="Refresh interval in seconds (default: 1.0)")
+    p_spec.add_argument("--height", type=int, default=10, help="Graph height in text lines (default: 10)")
+    p_spec.add_argument("--width", type=int, default=60, help="Graph width in columns (default: 60)")
+    p_spec.add_argument("--horizontal", action="store_true", help="Also display horizontal frequency sub-band table")
+    p_spec.add_argument("--once", action="store_true", help="Print single snapshot and exit")
+    p_spec.add_argument("--buffer", type=str, default="host_formed_beams_buffer", help="Buffer name to inspect")
+
     # Interactive command
     subparsers.add_parser("interactive", help="Start interactive steering console")
 
@@ -487,6 +688,17 @@ def main():
         watch_loop(client, args.interval)
     elif args.command == "stream":
         stream_loop(client, args.buffer, args.interval)
+    elif args.command == "spectrum":
+        spectrum_loop(
+            client,
+            beam_id=args.beam,
+            buffer_name=args.buffer,
+            interval_s=args.interval,
+            height=args.height,
+            width=args.width,
+            horizontal=args.horizontal,
+            once=args.once,
+        )
     elif args.command == "interactive":
         interactive_mode(client)
 
