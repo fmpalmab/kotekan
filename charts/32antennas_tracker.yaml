@@ -107,7 +107,6 @@ zero_samples:
 # ------------------------------------------------------------------------------
 gpu:
   profiling: false
-  frame_arrival_period: frame_arrival_period
   commands: &command_list
     - name: cudaInputData
       in_buf: host_voltage
@@ -121,8 +120,9 @@ gpu:
       samples_per_data_set: 153600
       integration_spectra: 320
       spacing_m: 0.6
-      max_beams: max_beams
-      initial_active_beams: initial_active_beams
+      max_beams: 4
+      initial_active_beams: 2
+      buffer_depth: 2
       # Carén Observatory Site Coordinates
       site_lat_deg: -33.4211146
       site_lon_deg: -70.8634710
@@ -140,7 +140,7 @@ gpu:
   gpu_0:
     kotekan_stage: cudaProcess
     gpu_id: 0
-    buffer_depth: gpu_buffer_depth
+    buffer_depth: 2
     commands: *command_list
     in_buffers:
       host_voltage: network_capture_buf

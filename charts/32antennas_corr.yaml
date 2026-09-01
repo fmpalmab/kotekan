@@ -80,7 +80,6 @@ zero_samples:
 
 gpu:
     profiling: false
-    frame_arrival_period: frame_arrival_period
     kernel_path: "lib/cuda/kernels"
     commands: &command_list
     - name: cudaInputData
