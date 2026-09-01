@@ -150,10 +150,11 @@ gpu:
 # ------------------------------------------------------------------------------
 # Monitoring & Output Writers
 # ------------------------------------------------------------------------------
-# Live REST inspection endpoint for formed beams telemetry
+# Live REST inspection endpoint for formed beams telemetry (4 MB snapshot)
 inspect_beams:
   kotekan_stage: restInspectFrame
   in_buf: host_formed_beams_buffer
+  len: 4194304    # 4 MB snapshot for web dashboard / REST telemetry
 
 # Stream output complex voltages to high-speed NVMe storage
 raw_file_write_beams:
