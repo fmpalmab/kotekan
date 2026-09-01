@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 ================================================================================
  CHARTS 3-BEAM CELESTIAL TARGET RECORDER
@@ -220,6 +220,8 @@ gpu:
       site_alt_m: {CAREN_ALT_M}
       freq_start_hz: {FREQ_START_MHZ * 1e6}
       freq_step_hz: {FREQ_STEP_MHZ * 1e6}
+      # Working antennas: raw elements 31 down to 24 (physical antennas 0 to 7)
+      active_raw_elements: [24, 25, 26, 27, 28, 29, 30, 31]
       # Beam 0: {targets[0]['name']}
       source_l0: {targets[0]['l0']:.8f}
       source_m0: {targets[0]['m0']:.8f}

@@ -185,6 +185,11 @@ class KotekanTrackerClient:
         payload = {"bad_elements": bad_elements, "active_elements": active_elements}
         return self._post("/beam_tracker/auto_mask", payload)
 
+    def set_working_antennas(self, active_elements: List[int]) -> Dict[str, Any]:
+        """Activate specified raw antenna elements and mask all others."""
+        payload = {"active_elements": active_elements}
+        return self._post("/beam_tracker/set_antenna_mask", payload)
+
 
 def render_ascii_skymap(trajectories: List[Dict[str, Any]], active_beams: int) -> str:
     """Render a 2D ASCII hemisphere sky map with beam positions."""
@@ -232,9 +237,14 @@ def print_status_dashboard(status: Dict[str, Any], latency_ms: float):
     print("=" * 80)
     print(f" REST Connection Latency : {latency_ms:.2f} ms")
     print(f" Output Format            : {status.get('output_format', 'N/A')}")
-    print(f" Total Array Elements    : {status.get('total_elements', 64)}")
-    print(f" Active Antennas (Alive) : {status.get('active_antennas', 0)} / {status.get('total_elements', 64)}")
+    print(f" Total Array Elements    : {status.get('total_elements', 32)}")
+    print(f" Active Antennas (Alive) : {status.get('active_antennas', 0)} / {status.get('total_elements', 32)}")
     print(f" Masked Antennas (Dead)  : {status.get('masked_antennas', 0)}")
+    active_raw = status.get("active_raw_elements", [])
+    active_phys = status.get("active_physical_antennas", [])
+    if active_raw:
+        print(f"   -> Active Raw Elements: {active_raw}")
+        print(f"   -> Physical Antennas  : {active_phys}")
     site = status.get("site", {})
     print(f" Site Location           : Lat {site.get('lat_deg', 0.0):.4f}°, Lon {site.get('lon_deg', 0.0):.4f}°, Alt {site.get('alt_m', 0.0):.1f} m")
     print(f" Active Beams / Capacity : {status.get('num_active_beams', 1)} / {status.get('max_beams_capacity', 8)}")
@@ -659,6 +669,11 @@ def main():
     p_am.add_argument("--h5-path", type=str, default=str(get_default_charts_h5_path()), help="Path to baseband data")
     p_am.add_argument("--threshold", type=float, default=0.05, help="Power threshold for dead antenna detection")
 
+    # Set working antennas command
+    p_swa = subparsers.add_parser("set-working-antennas", help="Activate working antennas (e.g. raw 24:31 or physical 0:7)")
+    p_swa.add_argument("--raw", type=str, default="24:31", help="Raw elements range (e.g. 24:31) or comma-separated list")
+    p_swa.add_argument("--physical", type=str, default=None, help="Physical antennas range (e.g. 0:7) or comma-separated list")
+
     # Watch command
     p_watch = subparsers.add_parser("watch", help="Watch status in live-updating dashboard")
     p_watch.add_argument("--interval", type=float, default=1.0, help="Update interval in seconds")
@@ -707,6 +722,22 @@ def main():
     elif args.command == "auto-mask":
         resp = client.auto_mask(args.h5_path, args.threshold)
         print(f"Success: {resp}")
+    elif args.command == "set-working-antennas":
+        if args.physical:
+            if ":" in args.physical:
+                p0, p1 = [int(x) for x in args.physical.split(":")]
+                phys_list = list(range(p0, p1 + 1))
+            else:
+                phys_list = [int(x) for x in args.physical.split(",")]
+            raw_list = [31 - p for p in phys_list]
+        else:
+            if ":" in args.raw:
+                r0, r1 = [int(x) for x in args.raw.split(":")]
+                raw_list = list(range(r0, r1 + 1))
+            else:
+                raw_list = [int(x) for x in args.raw.split(",")]
+        resp = client.set_working_antennas(raw_list)
+        print(f"Success: Activated raw elements {raw_list} -> physical antennas {[31 - r for r in raw_list]}")
     elif args.command == "watch":
         watch_loop(client, args.interval)
     elif args.command == "stream":

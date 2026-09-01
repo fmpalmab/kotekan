@@ -92,7 +92,33 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
         for (int elem : bad_elements) {
             if (elem >= 0 && elem < _num_elements && elem < static_cast<int>(MAX_TRACKER_ANTENNAS)) {
                 _shared_config.antenna_mask[elem] = 0;
-                INFO_NON_OO("Beam Tracker: Initialized bad antenna element {:d} (masked/disabled).", elem);
+                INFO_NON_OO("Beam Tracker: Initialized bad raw antenna element {:d} (masked/disabled).", elem);
+            }
+        }
+
+        // Support explicit active raw elements list (e.g. [24, 25, 26, 27, 28, 29, 30, 31])
+        auto active_raw = config.get_default<std::vector<int>>(unique_name, "active_raw_elements", {});
+        if (!active_raw.empty()) {
+            _shared_config.antenna_mask.fill(0);
+            for (int r : active_raw) {
+                if (r >= 0 && r < _num_elements && r < static_cast<int>(MAX_TRACKER_ANTENNAS)) {
+                    _shared_config.antenna_mask[r] = 1;
+                    const int phys_p = (_num_elements - 1) - r;
+                    INFO_NON_OO("Beam Tracker: Active raw element {:d} -> physical antenna {:d}", r, phys_p);
+                }
+            }
+        }
+
+        // Support explicit active physical antennas list (e.g. [0, 1, 2, 3, 4, 5, 6, 7])
+        auto active_phys = config.get_default<std::vector<int>>(unique_name, "active_physical_antennas", {});
+        if (!active_phys.empty()) {
+            _shared_config.antenna_mask.fill(0);
+            for (int p : active_phys) {
+                const int r = (_num_elements - 1) - p;
+                if (r >= 0 && r < _num_elements && r < static_cast<int>(MAX_TRACKER_ANTENNAS)) {
+                    _shared_config.antenna_mask[r] = 1;
+                    INFO_NON_OO("Beam Tracker: Active physical antenna {:d} -> raw element {:d}", p, r);
+                }
             }
         }
 
@@ -283,9 +309,13 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
 
                 std::size_t active_ant_count = 0;
                 nlohmann::json bad_elems = nlohmann::json::array();
+                nlohmann::json active_raw = nlohmann::json::array();
+                nlohmann::json active_phys = nlohmann::json::array();
                 for (int a = 0; a < _num_elements; ++a) {
                     if (_shared_config.antenna_mask[a] != 0) {
                         active_ant_count++;
+                        active_raw.push_back(a);
+                        active_phys.push_back((_num_elements - 1) - a);
                     } else {
                         bad_elems.push_back(a);
                     }
@@ -294,6 +324,8 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
                 reply["active_antennas"] = active_ant_count;
                 reply["masked_antennas"] = bad_elems.size();
                 reply["bad_elements"] = bad_elems;
+                reply["active_raw_elements"] = active_raw;
+                reply["active_physical_antennas"] = active_phys;
 
                 reply["beams"] = nlohmann::json::array();
                 reply["trajectories"] = nlohmann::json::array();

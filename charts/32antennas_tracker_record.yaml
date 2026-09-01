@@ -126,7 +126,8 @@ gpu:
       # Carén Observatory Site Coordinates
       site_lat_deg: -33.4211146
       site_lon_deg: -70.8634710
-      site_alt_m: 458.0
+      # Working antennas right now: raw elements 31 down to 24 (physical antennas 0 to 7)
+      active_raw_elements: [24, 25, 26, 27, 28, 29, 30, 31]
       # Initial pointing at Zenith (steerable live via REST or CLI)
       source_l0: 0.0
       source_m0: 0.0

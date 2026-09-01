@@ -30,17 +30,21 @@ __device__ __forceinline__ float2 unpack_int4_fast(const std::uint32_t byte_val)
 }
 
 template <int N_ANT>
-__device__ __forceinline__ float3 tracker_position_v5(const unsigned int element,
+__device__ __forceinline__ float3 tracker_position_v5(const unsigned int raw_element,
                                                       const float spacing_m) {
+    // CHARTS-32 convention: raw element (N_ANT - 1) -> physical antenna 0, ..., raw 0 -> physical (N_ANT - 1)
+    // E.g., raw element 31 -> physical 0, raw element 30 -> physical 1, ..., raw element 24 -> physical 7
+    const unsigned int phys_element = (N_ANT - 1U) - raw_element;
+
     if constexpr (N_ANT == 32 || N_ANT == 64) {
-        const unsigned int col = element & 7U;
-        const unsigned int row = element >> 3U;
+        const unsigned int col = phys_element & 7U;
+        const unsigned int row = phys_element >> 3U;
         return make_float3(static_cast<float>(col) * spacing_m,
                            static_cast<float>(row) * spacing_m,
                            0.0F);
     } else { // 128 or 256 antennas (16 columns)
-        const unsigned int col = element & 15U;
-        const unsigned int row = element >> 4U;
+        const unsigned int col = phys_element & 15U;
+        const unsigned int row = phys_element >> 4U;
         return make_float3(static_cast<float>(col) * spacing_m,
                            static_cast<float>(row) * spacing_m,
                            0.0F);
