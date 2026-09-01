@@ -7,7 +7,39 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KOTEKAN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 KOTEKAN_BIN="${KOTEKAN_ROOT}/build/kotekan/kotekan"
-CONFIG_FILE="${SCRIPT_DIR}/32antennas_tracker.yaml"
+# Mode selection: default is live in-memory (no disk writing). Pass --record to write files.
+RECORD_MODE=0
+for arg in "$@"; do
+    case "${arg}" in
+        --record)
+            RECORD_MODE=1
+            ;;
+        --live|--no-write)
+            RECORD_MODE=0
+            ;;
+        --help|-h)
+            echo "Usage: $0 [--live | --record]"
+            echo "  --live     : Run live beam tracking in RAM/GPU without writing files (default)"
+            echo "  --record   : Stream formed beam complex voltages to NVMe disk (/data/tracker/tracker_32ant)"
+            exit 0
+            ;;
+    esac
+done
+
+if [ "${RECORD_MODE}" -eq 1 ]; then
+    CONFIG_FILE="${SCRIPT_DIR}/32antennas_tracker_record.yaml"
+    MODE_DESC="RECORDING TO DISK (/data/tracker/tracker_32ant)"
+    OUTPUT_DIR="/data/tracker/tracker_32ant"
+    mkdir -p "${OUTPUT_DIR}" 2>/dev/null || {
+        echo "[WARN] Cannot write to ${OUTPUT_DIR}. Falling back to /tmp/tracker_32ant"
+        OUTPUT_DIR="/tmp/tracker_32ant"
+        mkdir -p "${OUTPUT_DIR}"
+    }
+else
+    CONFIG_FILE="${SCRIPT_DIR}/32antennas_tracker.yaml"
+    MODE_DESC="LIVE IN-MEMORY (NO DISK WRITING)"
+    OUTPUT_DIR="None (RAM / REST snapshot only)"
+fi
 
 PORT="${KOTEKAN_REST_PORT:-12048}"
 PID_FILE="/tmp/kotekan_32ant_tracker.pid"
@@ -15,6 +47,7 @@ LOG_FILE="/tmp/kotekan_32ant_tracker.log"
 
 echo "================================================================================"
 echo " CHARTS 32-ANTENNA LIVE DPDK BEAM TRACKER PIPELINE LAUNCHER"
+echo " Mode: ${MODE_DESC}"
 echo "================================================================================"
 
 if [ ! -f "${KOTEKAN_BIN}" ]; then
@@ -35,18 +68,9 @@ if [ -f "${PID_FILE}" ]; then
     fi
 fi
 
-# Ensure output directory exists (fallback to /tmp if /data not writable)
-OUTPUT_DIR="/data/tracker/tracker_32ant"
-if [ ! -d "${OUTPUT_DIR}" ]; then
-    mkdir -p "${OUTPUT_DIR}" 2>/dev/null || {
-        echo "[WARN] Cannot write to ${OUTPUT_DIR}. Falling back to /tmp/tracker_32ant"
-        OUTPUT_DIR="/tmp/tracker_32ant"
-        mkdir -p "${OUTPUT_DIR}"
-    }
-fi
-
 echo "[1/2] Launching 32-antenna Beam Tracker with DPDK ingest..."
 echo "  Configuration: ${CONFIG_FILE}"
+echo "  Mode         : ${MODE_DESC}"
 echo "  REST API Port: ${PORT}"
 echo "  Log File     : ${LOG_FILE}"
 

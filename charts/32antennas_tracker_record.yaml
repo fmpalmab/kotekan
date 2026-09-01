@@ -157,14 +157,11 @@ inspect_beams:
   len: 4194304    # 4 MB snapshot for web dashboard / REST telemetry
 
 # Stream output complex voltages to high-speed NVMe storage
-# (Disabled by default: live tracking runs in RAM/GPU without writing to disk.
-#  To enable disk recording, use charts/32antennas_tracker_record.yaml or uncomment below)
-# raw_file_write_beams:
-#   kotekan_stage: rawFileWrite
-#   in_buf: host_formed_beams_buffer
-#   file_name: formed_beams_32ant
-#   base_dir: /data/tracker/tracker_32ant
-#   file_ext: bin
-#   num_frames_per_file: 1
-#   prefix_hostname: false
-
+raw_file_write_beams:
+  kotekan_stage: rawFileWrite
+  in_buf: host_formed_beams_buffer
+  file_name: formed_beams_32ant
+  base_dir: /data/tracker/tracker_32ant
+  file_ext: bin
+  num_frames_per_file: 1
+  prefix_hostname: false
