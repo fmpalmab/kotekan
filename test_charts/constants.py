@@ -26,15 +26,16 @@ logger = logging.getLogger("kotekan.charts.constants")
 _external_module = None
 _source_description = "embedded_fallback"
 
+_test_charts_dir = Path(__file__).resolve().parent
+_kotekan_root = _test_charts_dir.parent
+_charts_root = _kotekan_root.parent
+
 # 1. Check if charts_constants is already in sys.modules or installed in environment
 try:
     _external_module = importlib.import_module("charts_constants")
     _source_description = "installed_charts_constants"
 except Exception:
     # 2. Check adjacent directories (e.g., ../../charts-constants, ../charts-constants)
-    _test_charts_dir = Path(__file__).resolve().parent
-    _kotekan_root = _test_charts_dir.parent
-    _charts_root = _kotekan_root.parent
     _adjacent_paths = [
         _charts_root / "charts-constants",
         _kotekan_root / "charts-constants",
