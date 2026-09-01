@@ -18,6 +18,10 @@ integration_spectra: 320         # Phase update window inside the kernel (~1.06 
 capture_n_frames: 45000          # Total capture run frames
 cpu_affinity: [0, 1]
 
+# Timing & Frame Arrival (RFSoC 300 MSPS PFB -> 10/3 us per time sample)
+sample_period_s: 3.333333333333e-6
+frame_arrival_period: samples_per_data_set * sample_period_s
+
 # Array & Frequency Sharding (32 antennas x 672 local channels)
 num_elements: 32                 # 32 Antennas (polarization / element lines)
 num_local_freq: 672              # Number of frequencies per stream sent to this node
@@ -102,7 +106,8 @@ zero_samples:
 # GPU Multi-Beam Tracker Stage
 # ------------------------------------------------------------------------------
 gpu:
-  profiling: true
+  profiling: false
+  frame_arrival_period: frame_arrival_period
   commands: &command_list
     - name: cudaInputData
       in_buf: host_voltage
