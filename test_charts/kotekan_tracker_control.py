@@ -344,6 +344,7 @@ def render_ascii_spectrum(
     width: int = 60,
     freq_start_mhz: float = 300.0,
     freq_step_mhz: float = 0.3,
+    bin_offset: int = 0,
 ) -> str:
     """Render a 2D ASCII power spectrum graph (dB vs Frequency Bins)."""
     n = len(db_values)
@@ -376,12 +377,15 @@ def render_ascii_spectrum(
     lines.append("      +" + "-" * width + ">")
 
     # Tick marks for frequency and bins
-    f_end_mhz = freq_start_mhz + n * freq_step_mhz
-    f_mid_mhz = 0.5 * (freq_start_mhz + f_end_mhz)
-    b_mid = n // 2
+    b_start = bin_offset
+    b_end = bin_offset + n - 1
+    b_mid = bin_offset + n // 2
+    f_start = freq_start_mhz + b_start * freq_step_mhz
+    f_end = freq_start_mhz + b_end * freq_step_mhz
+    f_mid = 0.5 * (f_start + f_end)
 
-    tick_line = f"  Bin: 0" + f"{b_mid}".center(width - 8) + f"{n-1}"
-    freq_line = f"  MHz: {freq_start_mhz:.0f}" + f"{f_mid_mhz:.1f} MHz".center(width - 16) + f"{f_end_mhz:.0f}"
+    tick_line = f"  Bin: {b_start}" + f"{b_mid}".center(width - 10) + f"{b_end}"
+    freq_line = f"  MHz: {f_start:.1f}" + f"{f_mid:.1f} MHz".center(width - 18) + f"{f_end:.1f}"
     lines.append(tick_line)
     lines.append(freq_line)
     return "\n".join(lines)
@@ -444,6 +448,7 @@ def spectrum_loop(
     once: bool = False,
     freq_start_mhz: float = 300.0,
     freq_step_mhz: float = 0.3,
+    bins: Optional[str] = None,
 ):
     """Continuously poll formed beams and display ASCII spectrum with dB and frequency bins."""
     try:
@@ -483,8 +488,22 @@ def spectrum_loop(
 
                 db_per_freq = 10.0 * np.log10(power_per_freq + 1e-12)
 
-                peak_bin = int(np.argmax(db_per_freq))
-                peak_db = float(db_per_freq[peak_bin])
+                # Optional zoom into specific bin range
+                bin_offset = 0
+                if bins:
+                    try:
+                        b_parts = bins.split(":")
+                        b0 = max(0, int(b_parts[0]))
+                        b1 = min(len(db_per_freq), int(b_parts[1])) if len(b_parts) > 1 and b_parts[1] else len(db_per_freq)
+                        if b1 > b0:
+                            db_per_freq = db_per_freq[b0:b1]
+                            bin_offset = b0
+                    except Exception as ex:
+                        print(f"[WARN] Invalid --bins '{bins}': {ex}")
+
+                peak_bin_rel = int(np.argmax(db_per_freq))
+                peak_bin = bin_offset + peak_bin_rel
+                peak_db = float(db_per_freq[peak_bin_rel])
                 mean_db = float(np.mean(db_per_freq))
                 min_db = float(np.min(db_per_freq))
 
@@ -496,16 +515,17 @@ def spectrum_loop(
                 now_str = time.strftime("%H:%M:%S")
                 print("=" * 80)
                 print(" CHARTS 32-ANTENNA BEAM TRACKER ASCII FREQUENCY SPECTRUM")
-                print(f" Time: {now_str} | Beam: {beam_to_plot} of {n_beams} active | Frame: {len(raw_data)/1024/1024:.2f} MB | Latency: {t_fetch_ms:.1f} ms")
+                zoom_info = f" | Bins: {bin_offset}..{bin_offset+len(db_per_freq)-1}" if bins else ""
+                print(f" Time: {now_str} | Beam: {beam_to_plot} of {n_beams} active{zoom_info} | Frame: {len(raw_data)/1024/1024:.2f} MB | Latency: {t_fetch_ms:.1f} ms")
                 print("=" * 80)
 
                 # Render 2D Vertical Spectrum Graph
-                print(render_ascii_spectrum(db_per_freq, height=height, width=width, freq_start_mhz=freq_start_mhz, freq_step_mhz=freq_step_mhz))
+                print(render_ascii_spectrum(db_per_freq, height=height, width=width, freq_start_mhz=freq_start_mhz, freq_step_mhz=freq_step_mhz, bin_offset=bin_offset))
 
                 # Render Horizontal Table if requested
                 if horizontal:
                     print()
-                    print(render_horizontal_spectrum(db_per_freq, n_bands=16, freq_start_mhz=freq_start_mhz, freq_step_mhz=freq_step_mhz))
+                    print(render_horizontal_spectrum(db_per_freq, n_bands=min(16, len(db_per_freq)), freq_start_mhz=freq_start_mhz + bin_offset * freq_step_mhz, freq_step_mhz=freq_step_mhz))
 
                 print()
                 print(f"  [Summary] Peak Bin : {peak_bin:03d} ({peak_freq_mhz:6.1f} MHz) -> {peak_db:6.1f} dB")
@@ -654,6 +674,7 @@ def main():
     p_spec.add_argument("--interval", type=float, default=1.0, help="Refresh interval in seconds (default: 1.0)")
     p_spec.add_argument("--height", type=int, default=10, help="Graph height in text lines (default: 10)")
     p_spec.add_argument("--width", type=int, default=60, help="Graph width in columns (default: 60)")
+    p_spec.add_argument("--bins", type=str, default=None, help="Zoom into bin range e.g. 300:380 (1-channel resolution)")
     p_spec.add_argument("--horizontal", action="store_true", help="Also display horizontal frequency sub-band table")
     p_spec.add_argument("--once", action="store_true", help="Print single snapshot and exit")
     p_spec.add_argument("--freq-start", type=float, default=300.0, help="Band start frequency in MHz (default: 300.0)")
@@ -702,6 +723,7 @@ def main():
             once=args.once,
             freq_start_mhz=args.freq_start,
             freq_step_mhz=args.freq_step,
+            bins=args.bins,
         )
     elif args.command == "interactive":
         interactive_mode(client)
