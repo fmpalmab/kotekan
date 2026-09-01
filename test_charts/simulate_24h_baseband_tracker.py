@@ -53,6 +53,7 @@ from constants import (
     FPGA_TIME_RESOLUTION_S,
     FPGA_TIME_RESOLUTION_US,
     LOCAL_FREQUENCY_CHANNELS,
+    get_default_charts_h5_path,
 )
 
 # Standard Astronomical Radio Sources in the Southern & Equatorial Sky
@@ -501,7 +502,7 @@ def simulate_24h_beam_tracker(
 
 def main():
     parser = argparse.ArgumentParser(description="CHARTS 24-Hour Baseband Beam Tracker Simulation")
-    default_h5 = Path("/home/fernando/charts/data/260816T013722Z_CHARTS_hdf5/baseband_virtual.h5")
+    default_h5 = get_default_charts_h5_path()
     parser.add_argument("--h5-path", type=Path, default=default_h5, help="Path to baseband HDF5 file")
     parser.add_argument("--n-time", type=int, default=15360, help="Time samples per dump")
     parser.add_argument("--n-freq", type=int, default=336, help="Frequency channels (e.g. 84, 168, 336, 672)")

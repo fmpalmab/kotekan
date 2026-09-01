@@ -8,12 +8,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KOTEKAN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 KOTEKAN_BIN="${KOTEKAN_ROOT}/build/kotekan/kotekan"
 if [ -z "${PYTHON_BIN:-}" ]; then
-    if [ -f "${KOTEKAN_ROOT}/.venv/bin/python" ]; then
+    if [ -n "${VIRTUAL_ENV:-}" ] && [ -x "${VIRTUAL_ENV}/bin/python" ]; then
+        PYTHON_BIN="${VIRTUAL_ENV}/bin/python"
+    elif [ -f "${KOTEKAN_ROOT}/.venv/bin/python" ]; then
         PYTHON_BIN="${KOTEKAN_ROOT}/.venv/bin/python"
     elif [ -f "${KOTEKAN_ROOT}/.venv/Scripts/python.exe" ]; then
         PYTHON_BIN="${KOTEKAN_ROOT}/.venv/Scripts/python.exe"
+    elif command -v python3 >/dev/null 2>&1; then
+        PYTHON_BIN="$(command -v python3)"
+    elif command -v python >/dev/null 2>&1; then
+        PYTHON_BIN="$(command -v python)"
     else
-        PYTHON_BIN="$(which python3 2>/dev/null || which python 2>/dev/null || echo "python")"
+        PYTHON_BIN="python"
     fi
 fi
 

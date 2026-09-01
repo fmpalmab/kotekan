@@ -45,6 +45,7 @@ from constants import (
     DEFAULT_FREQUENCY_START_MHZ,
     DEFAULT_SPACING_M,
     FPGA_TIME_RESOLUTION_US,
+    get_default_charts_h5_path,
 )
 
 
@@ -342,7 +343,7 @@ def generate_beam_patterns_and_outputs_plot(
 
 def main():
     parser = argparse.ArgumentParser(description="CHARTS Beam Tracker Beampattern, Sidelobe & Output Voltage Visualizer")
-    default_h5 = Path("/home/fernando/charts/data/260816T013722Z_CHARTS_hdf5/baseband_virtual.h5")
+    default_h5 = get_default_charts_h5_path()
     default_plot = _kotekan_root / "test_charts" / "charts_beampattern_sidelobes_and_outputs.png"
 
     parser.add_argument("--h5-path", type=Path, default=default_h5, help="Path to baseband HDF5 file")

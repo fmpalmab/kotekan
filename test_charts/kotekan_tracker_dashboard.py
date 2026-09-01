@@ -47,6 +47,7 @@ from constants import (
     DEFAULT_SPACING_M,
     FPGA_TIME_RESOLUTION_US,
     K_DM,
+    get_default_charts_h5_path,
 )
 from kotekan_tracker_control import KotekanTrackerClient
 from plot_beam_patterns_and_outputs import (
@@ -71,7 +72,7 @@ BEAM_COLORS = [
 ]
 
 # Load site baseband snapshot into memory for fast live output rendering
-DEFAULT_H5_PATH = Path("/home/fernando/charts/data/260816T013722Z_CHARTS_hdf5/baseband_virtual.h5")
+DEFAULT_H5_PATH = get_default_charts_h5_path()
 GLOBAL_RAW_VOLTAGES = None
 if DEFAULT_H5_PATH.exists():
     try:

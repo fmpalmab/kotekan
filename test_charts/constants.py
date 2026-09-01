@@ -162,3 +162,30 @@ CPT_DELTA_FREQ: float = float(_get_external("DELTA_FREQ", 0.3))
 CPT_NUM_FREQ: int = int(_get_external("NUM_FREQ", 672))
 CPT_NUM_BANDS: int = int(_get_external("NUM_BANDS", 2))
 CPT_SPECTRA_PER_PACKET: int = int(_get_external("SPECTRA_PER_PACKET", 4))
+
+
+# ---------------------------------------------------------------------------
+# 6. Dynamic HDF5 Baseband Data Path Resolution
+# ---------------------------------------------------------------------------
+def get_default_charts_h5_path() -> Path:
+    """Dynamically resolves path to baseband_virtual.h5 without hardcoded user directories."""
+    import os
+    env_path = os.environ.get("CHARTS_H5_PATH")
+    if env_path:
+        p = Path(env_path)
+        if p.exists():
+            return p
+
+    candidates = [
+        _charts_root / "data" / "260816T013722Z_CHARTS_hdf5" / "baseband_virtual.h5",
+        _kotekan_root / "data" / "260816T013722Z_CHARTS_hdf5" / "baseband_virtual.h5",
+        Path.home() / "charts" / "data" / "260816T013722Z_CHARTS_hdf5" / "baseband_virtual.h5",
+        Path.home() / "fpalma" / "charts" / "data" / "260816T013722Z_CHARTS_hdf5" / "baseband_virtual.h5",
+        Path("/tmp/kotekan_continuous_tracker/input/window_replay_0000000.bin"),
+    ]
+    for c in candidates:
+        if c.exists():
+            return c
+    # Fallback to standard relative location
+    return _charts_root / "data" / "260816T013722Z_CHARTS_hdf5" / "baseband_virtual.h5"
+

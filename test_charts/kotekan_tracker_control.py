@@ -44,9 +44,9 @@ try:
         C_LIGHT,
         CHARTS_LATITUDE_DEG,
         CHARTS_LONGITUDE_DEG,
-        CHARTS_ALTITUDE_M,
         DEFAULT_SPACING_M,
         LOCAL_FREQUENCY_CHANNELS,
+        get_default_charts_h5_path,
     )
 except ImportError:
     CHARTS_LATITUDE_DEG = -33.4211146
@@ -54,6 +54,10 @@ except ImportError:
     CHARTS_ALTITUDE_M = 458.0
     DEFAULT_SPACING_M = 0.6
     LOCAL_FREQUENCY_CHANNELS = 336
+    def get_default_charts_h5_path():
+        from pathlib import Path
+        return Path("baseband_virtual.h5")
+
 
 
 class KotekanTrackerClient:
@@ -371,7 +375,7 @@ def main():
 
     # Auto-mask command
     p_am = subparsers.add_parser("auto-mask", help="Automatically detect and mask dead/unplugged antennas")
-    p_am.add_argument("--h5-path", type=str, default="/home/fernando/charts/data/260816T013722Z_CHARTS_hdf5/baseband_virtual.h5", help="Path to baseband data")
+    p_am.add_argument("--h5-path", type=str, default=str(get_default_charts_h5_path()), help="Path to baseband data")
     p_am.add_argument("--threshold", type=float, default=0.05, help="Power threshold for dead antenna detection")
 
     # Watch command

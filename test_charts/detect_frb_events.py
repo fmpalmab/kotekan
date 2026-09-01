@@ -11,7 +11,7 @@ Provides:
 
 Usage:
     # Scan baseband dataset for events
-    python detect_frb_events.py --h5-path /home/fernando/charts/data/260816T013722Z_CHARTS_hdf5/baseband_virtual.h5
+    python detect_frb_events.py --h5-path /path/to/baseband_virtual.h5
 
     # Inject a test FRB (DM=350 pc/cm^3, SNR=15) into real baseband and detect it
     python detect_frb_events.py --inject --dm 350.0 --snr 18.0 --out-plot frb_event_candidate.png
@@ -47,6 +47,7 @@ from constants import (
     DEFAULT_SPACING_M,
     FPGA_TIME_RESOLUTION_US,
     K_DM,
+    get_default_charts_h5_path,
 )
 
 
@@ -426,7 +427,7 @@ def run_frb_detection(
 
 def main():
     parser = argparse.ArgumentParser(description="CHARTS FRB & Transient Event Detector")
-    default_h5 = Path("/home/fernando/charts/data/260816T013722Z_CHARTS_hdf5/baseband_virtual.h5")
+    default_h5 = get_default_charts_h5_path()
     default_plot = _kotekan_root / "test_charts" / "charts_frb_event_candidate.png"
 
     parser.add_argument("--h5-path", type=Path, default=default_h5, help="Path to baseband virtual HDF5 dataset")
