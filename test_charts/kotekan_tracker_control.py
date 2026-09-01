@@ -91,6 +91,16 @@ class KotekanTrackerClient:
         """Query /beam_tracker/status."""
         return self._get("/beam_tracker/status")
 
+    def get_inspect_frame(self, buffer_name: str = "host_formed_beams_buffer") -> bytes:
+        """Fetch raw binary frame from /inspect_frame/<buffer_name>."""
+        url = f"{self.base_url}/inspect_frame/{buffer_name}"
+        req = urllib.request.Request(url, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                return resp.read()
+        except urllib.error.URLError as e:
+            raise ConnectionError(f"Failed to fetch inspect frame from {url}: {e}")
+
     def steer_lm(self, beam_id: int, l0: float, m0: float, dl: float = 0.0, dm: float = 0.0) -> str:
         """Set beam trajectory via direction cosines (l, m)."""
         payload = {
@@ -268,6 +278,66 @@ def watch_loop(client: KotekanTrackerClient, interval_s: float = 1.0):
         print("\nExiting watch mode.")
 
 
+def stream_loop(client: KotekanTrackerClient, buffer_name: str = "host_formed_beams_buffer", interval_s: float = 1.0):
+    """Continuously poll and display live formed beam RF stream metrics in terminal."""
+    print("=" * 80)
+    print(f" CHARTS LIVE FORMED BEAM RF STREAM MONITOR (/inspect_frame/{buffer_name})")
+    print(f" Endpoint: {client.base_url}/inspect_frame/{buffer_name}")
+    print(" Press Ctrl+C to stop.")
+    print("=" * 80)
+
+    frame_idx = 0
+    try:
+        while True:
+            t0 = time.perf_counter()
+            try:
+                raw_data = client.get_inspect_frame(buffer_name)
+                t_fetch_ms = (time.perf_counter() - t0) * 1000.0
+
+                data = np.frombuffer(raw_data, dtype=np.complex64)
+                n_samples = len(data)
+
+                try:
+                    st = client.get_status()
+                    n_beams = st.get("num_active_beams", 2)
+                except Exception:
+                    n_beams = 2
+
+                now_str = time.strftime("%H:%M:%S")
+                mb_size = len(raw_data) / (1024.0 * 1024.0)
+                print(f"\n[{now_str}] Frame #{frame_idx:04d} | Payload: {mb_size:.2f} MB ({n_samples:,} complex float2) | REST: {t_fetch_ms:.1f} ms")
+
+                samples_per_beam = n_samples // max(1, n_beams)
+                for b in range(n_beams):
+                    b_slice = data[b * samples_per_beam : (b + 1) * samples_per_beam]
+                    if len(b_slice) == 0:
+                        continue
+                    power = np.abs(b_slice) ** 2
+                    mean_p = float(np.mean(power))
+                    rms_v = float(np.sqrt(mean_p))
+                    peak_p = float(np.max(power))
+                    db_p = 10.0 * math.log10(mean_p + 1e-12)
+
+                    bar_len = 24
+                    bar_filled = min(bar_len, max(0, int(rms_v * 12)))
+                    bar_str = "█" * bar_filled + "░" * (bar_len - bar_filled)
+
+                    print(f"  Beam {b} | RMS: {rms_v:8.4f} | Power: {db_p:6.1f} dB | [{bar_str}] Peak: {peak_p:8.4f}")
+
+                frame_idx += 1
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    print(f"[{time.strftime('%H:%M:%S')}] Waiting for beam tracker to produce first frame... (HTTP 404)")
+                else:
+                    print(f"[ERROR] HTTP {e.code}: {e.reason}")
+            except Exception as e:
+                print(f"[{time.strftime('%H:%M:%S')}] Waiting for stream / frame arrival: {e}")
+
+            time.sleep(interval_s)
+    except KeyboardInterrupt:
+        print("\nExiting stream monitor.")
+
+
 def interactive_mode(client: KotekanTrackerClient):
     """Interactive steering prompt."""
     print("=" * 80)
@@ -382,6 +452,11 @@ def main():
     p_watch = subparsers.add_parser("watch", help="Watch status in live-updating dashboard")
     p_watch.add_argument("--interval", type=float, default=1.0, help="Update interval in seconds")
 
+    # Stream command
+    p_stream = subparsers.add_parser("stream", help="Stream live formed beam RF metrics and powers in terminal")
+    p_stream.add_argument("--interval", type=float, default=1.0, help="Poll interval in seconds (default: 1.0)")
+    p_stream.add_argument("--buffer", type=str, default="host_formed_beams_buffer", help="Buffer name to inspect")
+
     # Interactive command
     subparsers.add_parser("interactive", help="Start interactive steering console")
 
@@ -410,6 +485,8 @@ def main():
         print(f"Success: {resp}")
     elif args.command == "watch":
         watch_loop(client, args.interval)
+    elif args.command == "stream":
+        stream_loop(client, args.buffer, args.interval)
     elif args.command == "interactive":
         interactive_mode(client)
 
