@@ -20,7 +20,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import curses
+try:
+    import curses
+except ImportError:
+    curses = None
 import json
 import math
 import os
