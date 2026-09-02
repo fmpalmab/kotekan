@@ -122,6 +122,43 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
             }
         }
 
+        // 3D Antenna Physical Positions: Calculated outside the CUDA kernel
+        // Supports "descending" (CHARTS convention: raw 31 -> physical 0), "ascending", or custom 3D coordinates
+        std::string antenna_order = config.get_default<std::string>(unique_name, "antenna_order", "descending");
+        _shared_config.spacing_m = _spacing_m;
+
+        for (int r = 0; r < _num_elements && r < static_cast<int>(MAX_TRACKER_ANTENNAS); ++r) {
+            int phys_elem = (antenna_order == "descending") ? ((_num_elements - 1) - r) : r;
+            unsigned int col, row;
+            if (_num_elements <= 64) {
+                col = phys_elem & 7U;
+                row = phys_elem >> 3U;
+            } else {
+                col = phys_elem & 15U;
+                row = phys_elem >> 4U;
+            }
+            _shared_config.antenna_positions[r] = make_float3(
+                static_cast<float>(col) * _spacing_m,
+                static_cast<float>(row) * _spacing_m,
+                0.0f
+            );
+        }
+        INFO_NON_OO("Beam Tracker: Antenna physical positions precomputed outside kernel (order='{:s}', spacing={:.3f}m)",
+                    antenna_order, _spacing_m);
+
+        // Optional custom 3D coordinates from YAML (e.g. [[x0, y0, z0], [x1, y1, z1], ...])
+        if (config.exists(unique_name, "custom_antenna_positions")) {
+            auto custom_pos = config.get<std::vector<std::vector<float>>>(unique_name, "custom_antenna_positions");
+            for (std::size_t i = 0; i < custom_pos.size() && i < static_cast<std::size_t>(_num_elements) && i < MAX_TRACKER_ANTENNAS; ++i) {
+                if (custom_pos[i].size() >= 2) {
+                    float z = (custom_pos[i].size() >= 3) ? custom_pos[i][2] : 0.0f;
+                    _shared_config.antenna_positions[i] = make_float3(custom_pos[i][0], custom_pos[i][1], z);
+                    INFO_NON_OO("Beam Tracker: Custom survey coordinate for raw element {:d}: ({:.3f}, {:.3f}, {:.3f}) m",
+                                i, custom_pos[i][0], custom_pos[i][1], z);
+                }
+            }
+        }
+
         // Register Dynamic REST Endpoints once
         if (!_endpoints_registered) {
             auto& rest = restServer::instance();
@@ -327,6 +364,17 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
                 reply["active_raw_elements"] = active_raw;
                 reply["active_physical_antennas"] = active_phys;
 
+                nlohmann::json ant_pos_json = nlohmann::json::array();
+                for (int a = 0; a < _num_elements; ++a) {
+                    ant_pos_json.push_back({
+                        {"raw_element", a},
+                        {"x", _shared_config.antenna_positions[a].x},
+                        {"y", _shared_config.antenna_positions[a].y},
+                        {"z", _shared_config.antenna_positions[a].z}
+                    });
+                }
+                reply["antenna_positions"] = ant_pos_json;
+
                 reply["beams"] = nlohmann::json::array();
                 reply["trajectories"] = nlohmann::json::array();
                 for (std::size_t b = 0; b < MAX_TRACKER_BEAMS; ++b) {
@@ -361,6 +409,28 @@ cudaBeamTrackerCommand::cudaBeamTrackerCommand(
                     }
                 }
                 conn.send_json_reply(reply);
+            });
+
+            // 7. Dynamic Antenna Positions Update (e.g. site survey coordinates or online calibration)
+            rest.register_post_callback("/beam_tracker/set_antenna_positions", [](connectionInstance& conn, nlohmann::json& j) {
+                try {
+                    std::lock_guard<std::mutex> lk(_global_mutex);
+                    if (j.contains("positions") && j["positions"].is_array()) {
+                        for (const auto& item : j["positions"]) {
+                            int elem = item.value("raw_element", item.value("element", -1));
+                            if (elem >= 0 && elem < static_cast<int>(MAX_TRACKER_ANTENNAS)) {
+                                float x = item.value("x", _shared_config.antenna_positions[elem].x);
+                                float y = item.value("y", _shared_config.antenna_positions[elem].y);
+                                float z = item.value("z", _shared_config.antenna_positions[elem].z);
+                                _shared_config.antenna_positions[elem] = make_float3(x, y, z);
+                            }
+                        }
+                    }
+                    INFO_NON_OO("Beam Tracker: Dynamically updated antenna physical coordinates.");
+                    conn.send_text_reply("Antenna positions updated\n");
+                } catch (const std::exception& e) {
+                    conn.send_error(e.what(), HTTP_RESPONSE::BAD_REQUEST);
+                }
             });
 
             _endpoints_registered = true;

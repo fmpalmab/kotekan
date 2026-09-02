@@ -126,6 +126,8 @@ gpu:
       # Carén Observatory Site Coordinates
       site_lat_deg: -33.4211146
       site_lon_deg: -70.8634710
+      # Antenna mapping convention outside kernel: descending (raw 31 -> physical 0) or ascending
+      antenna_order: "descending"
       # Working antennas right now: raw elements 31 down to 24 (physical antennas 0 to 7)
       active_raw_elements: [24, 25, 26, 27, 28, 29, 30, 31]
       # Initial pointing at Zenith (steerable live via REST or CLI)

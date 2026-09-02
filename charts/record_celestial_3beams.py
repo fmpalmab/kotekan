@@ -220,6 +220,8 @@ gpu:
       site_alt_m: {CAREN_ALT_M}
       freq_start_hz: {FREQ_START_MHZ * 1e6}
       freq_step_hz: {FREQ_STEP_MHZ * 1e6}
+      # Antenna mapping convention outside kernel: descending (raw 31 -> physical 0)
+      antenna_order: "descending"
       # Working antennas: raw elements 31 down to 24 (physical antennas 0 to 7)
       active_raw_elements: [24, 25, 26, 27, 28, 29, 30, 31]
       # Beam 0: {targets[0]['name']}

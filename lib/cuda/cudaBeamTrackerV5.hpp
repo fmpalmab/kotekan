@@ -61,8 +61,18 @@ struct BeamTrackerConfig {
     std::size_t time_unroll = 8; // 2, 4, or 8
     bool enable_cuda_graph = false;
     std::array<uint8_t, MAX_TRACKER_ANTENNAS> antenna_mask;
+    std::array<float3, MAX_TRACKER_ANTENNAS> antenna_positions;
     SiteLocation site;
-    BeamTrackerConfig() { antenna_mask.fill(1); }
+    BeamTrackerConfig() {
+        antenna_mask.fill(1);
+        for (std::size_t i = 0; i < MAX_TRACKER_ANTENNAS; ++i) {
+            const unsigned int col = (i < 64) ? (i & 7U) : (i & 15U);
+            const unsigned int row = (i < 64) ? (i >> 3U) : (i >> 4U);
+            antenna_positions[i] = make_float3(static_cast<float>(col) * spacing_m,
+                                              static_cast<float>(row) * spacing_m,
+                                              0.0f);
+        }
+    }
 };
 
 // Multi-beam configuration supporting dynamic active slot counts
@@ -75,8 +85,18 @@ struct MultiBeamTrackerConfig {
     std::size_t time_unroll = 8;
     bool enable_cuda_graph = false;
     std::array<uint8_t, MAX_TRACKER_ANTENNAS> antenna_mask;
+    std::array<float3, MAX_TRACKER_ANTENNAS> antenna_positions;
     SiteLocation site;
-    MultiBeamTrackerConfig() { antenna_mask.fill(1); }
+    MultiBeamTrackerConfig() {
+        antenna_mask.fill(1);
+        for (std::size_t i = 0; i < MAX_TRACKER_ANTENNAS; ++i) {
+            const unsigned int col = (i < 64) ? (i & 7U) : (i & 15U);
+            const unsigned int row = (i < 64) ? (i >> 3U) : (i >> 4U);
+            antenna_positions[i] = make_float3(static_cast<float>(col) * spacing_m,
+                                              static_cast<float>(row) * spacing_m,
+                                              0.0f);
+        }
+    }
 };
 
 /**
