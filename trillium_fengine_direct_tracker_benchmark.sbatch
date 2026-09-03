@@ -91,44 +91,49 @@ rm -rf build
 mkdir -p build
 cd build
 
-cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="90;80" -DUSE_NUMA=ON -DWERROR=OFF
+cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="90;80" -DUSE_NUMA=ON -DWERROR=OFF -DCMAKE_SKIP_RPATH=TRUE
 make -j${SLURM_CPUS_PER_TASK} kotekan benchmark_direct_beam_tracker benchmark_kotekan_cuda_tracker_v5 benchmark_tracker_v5_vs_direct || {
-    echo "[WARN] CMake multi-target build had issues; building kotekan core and standalone NVCC binaries."
+    echo "[WARN] CMake multi-target build had issues; building kotekan core."
     make -j${SLURM_CPUS_PER_TASK} kotekan || true
 }
 cd ..
 
-export LD_LIBRARY_PATH="${REPO_ROOT}/build/external/n2k:${REPO_ROOT}/build/external/gputils:${LD_LIBRARY_PATH:-}"
+# Apply Alliance setrpaths.sh to ensure all CVMFS / GCC runtime libraries and $ORIGIN are linked
+if command -v setrpaths.sh >/dev/null 2>&1; then
+    echo "Applying Alliance setrpaths.sh to build tree..."
+    setrpaths.sh --path build --add_origin 2>/dev/null || true
+fi
 
 # ============================================================================
-# 4. Standalone NVCC Compilation Fallback for Benchmarks
+# 4. Standalone NVCC Compilation for Benchmarks
 # ============================================================================
 echo "========================================="
 echo " 4. Verifying Standalone CUDA Benchmarks Compilation"
 echo "========================================="
-if [ ! -f "build/test_charts/benchmark_tracker_v5_vs_direct" ]; then
-    echo "Building standalone benchmark_tracker_v5_vs_direct via NVCC..."
-    nvcc -std=c++17 -O3 --use_fast_math \
-        -arch=native \
-        -Xptxas -O3 \
-        -Xcompiler -fopenmp \
-        -I lib/cuda \
-        -I lib/metadata \
-        -I lib/core \
-        -I lib/utils \
-        -I lib/stages \
-        -I lib/dpdk \
-        -I lib/ \
-        -I external/json \
-        -I external/fmt \
-        -I external/gputils/src_lib \
-        -I external/gputils/src_include \
-        test_charts/benchmark_tracker_v5_vs_direct.cpp \
-        lib/cuda/cudaBeamTrackerV5.cu \
-        lib/cuda/cudaDirectBeamTracker.cu \
-        lib/core/kotekanLogging.cpp \
-        lib/core/errors.c \
-        -o benchmark_tracker_v5_vs_direct
+echo "Compiling standalone benchmark_tracker_v5_vs_direct via NVCC..."
+nvcc -std=c++17 -O3 --use_fast_math \
+    -arch=native \
+    -Xptxas -O3 \
+    -Xcompiler -fopenmp \
+    -I lib/cuda \
+    -I lib/metadata \
+    -I lib/core \
+    -I lib/utils \
+    -I lib/stages \
+    -I lib/dpdk \
+    -I lib/ \
+    -I external/json \
+    -I external/fmt \
+    -I external/gputils/src_lib \
+    -I external/gputils/src_include \
+    test_charts/benchmark_tracker_v5_vs_direct.cpp \
+    lib/cuda/cudaBeamTrackerV5.cu \
+    lib/cuda/cudaDirectBeamTracker.cu \
+    lib/core/kotekanLogging.cpp \
+    lib/core/errors.c \
+    -o benchmark_tracker_v5_vs_direct
+
+if [ -f "./benchmark_tracker_v5_vs_direct" ]; then
     BENCHMARK_BIN="./benchmark_tracker_v5_vs_direct"
 else
     BENCHMARK_BIN="./build/test_charts/benchmark_tracker_v5_vs_direct"

@@ -274,6 +274,8 @@ void run_comparison_benchmark(
 } // namespace
 
 int main(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
     std::cout << "========================================================================================================================\n";
     std::cout << " CHARTS Radio Telescope Beam Tracker Benchmark: Direct Beamformer vs. Beam Tracker V5\n";
     std::cout << " Grounded in CHORD FRB Beamformer (Smith 2022) & SPOTLIGHT Multi-Beam Backend (Gajendran et al. 2025)\n";

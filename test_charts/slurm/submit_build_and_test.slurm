@@ -45,12 +45,17 @@ echo ">>> Configuring CMake..."
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DENABLE_CUDA=ON \
-    -DCMAKE_CUDA_ARCHITECTURES="80;90"
+    -DCMAKE_CUDA_ARCHITECTURES="80;90" \
+    -DCMAKE_SKIP_RPATH=TRUE
 
 echo ">>> Compiling Kotekan & Test Targets..."
 make -j${SLURM_CPUS_PER_TASK:-8} kotekan test_beam_tracker_suite test_chaos_engineering benchmark_kotekan_cuda_tracker_v5 benchmark_pipeline_stages benchmark_direct_beam_tracker benchmark_tracker_v5_vs_direct
 
-export LD_LIBRARY_PATH="${BUILD_DIR}/external/n2k:${REPO_ROOT}/build/external/n2k:${LD_LIBRARY_PATH:-}"
+# Apply Alliance setrpaths.sh if available
+if command -v setrpaths.sh >/dev/null 2>&1; then
+    echo "Applying Alliance setrpaths.sh to build tree..."
+    setrpaths.sh --path "${BUILD_DIR}" --add_origin 2>/dev/null || true
+fi
 
 echo "======================================================================"
 echo " 1. Running Comprehensive Beam Tracker Test Suite (64, 128, 256 Ants)"

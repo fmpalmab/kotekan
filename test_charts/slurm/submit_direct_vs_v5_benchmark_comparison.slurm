@@ -60,33 +60,39 @@ cmake .. \
     -DENABLE_CUDA=ON \
     -DCMAKE_CUDA_ARCHITECTURES="80;89;90;100;120" \
     -DUSE_NUMA=ON \
-    -DWERROR=OFF
+    -DWERROR=OFF \
+    -DCMAKE_SKIP_RPATH=TRUE
 
 echo ">>> Compiling Head-to-Head Comparative Benchmark..."
 make -j${SLURM_CPUS_PER_TASK:-8} benchmark_tracker_v5_vs_direct kotekan || true
 
-# Fallback standalone compilation if needed
-if [ ! -f "test_charts/benchmark_tracker_v5_vs_direct" ] && [ ! -f "${REPO_ROOT}/benchmark_tracker_v5_vs_direct" ]; then
-    echo ">>> Building standalone benchmark_tracker_v5_vs_direct via NVCC fallback..."
-    cd "${REPO_ROOT}"
-    nvcc -std=c++17 -O3 --use_fast_math \
-        -arch=native \
-        -Xcompiler -fopenmp \
-        -I lib/cuda -I lib/metadata -I lib/core -I lib/utils -I lib/stages -I lib/ \
-        -I external/json -I external/fmt \
-        test_charts/benchmark_tracker_v5_vs_direct.cpp \
-        lib/cuda/cudaBeamTrackerV5.cu \
-        lib/cuda/cudaDirectBeamTracker.cu \
-        lib/core/kotekanLogging.cpp \
-        lib/core/errors.c \
-        -o benchmark_tracker_v5_vs_direct
+# Apply Alliance setrpaths.sh if available
+if command -v setrpaths.sh >/dev/null 2>&1; then
+    echo "Applying Alliance setrpaths.sh to build tree..."
+    setrpaths.sh --path "${BUILD_DIR}" --add_origin 2>/dev/null || true
+fi
+
+cd "${REPO_ROOT}"
+
+# Standalone compilation via NVCC directly
+echo ">>> Building standalone benchmark_tracker_v5_vs_direct via NVCC..."
+nvcc -std=c++17 -O3 --use_fast_math \
+    -arch=native \
+    -Xcompiler -fopenmp \
+    -I lib/cuda -I lib/metadata -I lib/core -I lib/utils -I lib/stages -I lib/ \
+    -I external/json -I external/fmt \
+    test_charts/benchmark_tracker_v5_vs_direct.cpp \
+    lib/cuda/cudaBeamTrackerV5.cu \
+    lib/cuda/cudaDirectBeamTracker.cu \
+    lib/core/kotekanLogging.cpp \
+    lib/core/errors.c \
+    -o benchmark_tracker_v5_vs_direct
+
+if [ -f "${REPO_ROOT}/benchmark_tracker_v5_vs_direct" ]; then
     BENCHMARK_BIN="${REPO_ROOT}/benchmark_tracker_v5_vs_direct"
 else
     BENCHMARK_BIN="${BUILD_DIR}/test_charts/benchmark_tracker_v5_vs_direct"
 fi
-
-cd "${REPO_ROOT}"
-export LD_LIBRARY_PATH="${BUILD_DIR}/external/n2k:${REPO_ROOT}/build/external/n2k:${LD_LIBRARY_PATH:-}"
 
 # 3. Run Head-to-Head Comparative Benchmark
 echo "======================================================================"
