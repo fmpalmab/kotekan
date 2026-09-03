@@ -85,6 +85,7 @@ else
 fi
 
 cd "${REPO_ROOT}"
+export LD_LIBRARY_PATH="${BUILD_DIR}/external/n2k:${REPO_ROOT}/build/external/n2k:${LD_LIBRARY_PATH:-}"
 
 # 3. Run Standalone Direct Beam Tracker CUDA Benchmarks (32, 64, 128, 256 antennas)
 echo "======================================================================"

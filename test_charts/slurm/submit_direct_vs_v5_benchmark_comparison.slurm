@@ -86,6 +86,7 @@ else
 fi
 
 cd "${REPO_ROOT}"
+export LD_LIBRARY_PATH="${BUILD_DIR}/external/n2k:${REPO_ROOT}/build/external/n2k:${LD_LIBRARY_PATH:-}"
 
 # 3. Run Head-to-Head Comparative Benchmark
 echo "======================================================================"

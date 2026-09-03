@@ -50,6 +50,8 @@ cmake .. \
 echo ">>> Compiling Kotekan & Test Targets..."
 make -j${SLURM_CPUS_PER_TASK:-8} kotekan test_beam_tracker_suite test_chaos_engineering benchmark_kotekan_cuda_tracker_v5 benchmark_pipeline_stages benchmark_direct_beam_tracker benchmark_tracker_v5_vs_direct
 
+export LD_LIBRARY_PATH="${BUILD_DIR}/external/n2k:${REPO_ROOT}/build/external/n2k:${LD_LIBRARY_PATH:-}"
+
 echo "======================================================================"
 echo " 1. Running Comprehensive Beam Tracker Test Suite (64, 128, 256 Ants)"
 echo "======================================================================"

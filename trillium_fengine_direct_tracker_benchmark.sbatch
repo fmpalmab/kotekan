@@ -91,12 +91,14 @@ rm -rf build
 mkdir -p build
 cd build
 
-cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="90;80" -DUSE_NUMA=ON -DWERROR=OFF -DCMAKE_SKIP_RPATH=TRUE
+cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="90;80" -DUSE_NUMA=ON -DWERROR=OFF
 make -j${SLURM_CPUS_PER_TASK} kotekan benchmark_direct_beam_tracker benchmark_kotekan_cuda_tracker_v5 benchmark_tracker_v5_vs_direct || {
     echo "[WARN] CMake multi-target build had issues; building kotekan core and standalone NVCC binaries."
     make -j${SLURM_CPUS_PER_TASK} kotekan || true
 }
 cd ..
+
+export LD_LIBRARY_PATH="${REPO_ROOT}/build/external/n2k:${REPO_ROOT}/build/external/gputils:${LD_LIBRARY_PATH:-}"
 
 # ============================================================================
 # 4. Standalone NVCC Compilation Fallback for Benchmarks
