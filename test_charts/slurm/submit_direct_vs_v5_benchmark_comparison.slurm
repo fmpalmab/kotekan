@@ -29,6 +29,16 @@ if command -v module >/dev/null 2>&1; then
     module load hdf5 2>/dev/null || true
 fi
 
+# Setup scratch python environment inheriting cluster modules
+VENV_DIR="${SLURM_TMPDIR:-/tmp}/kotekan_pyenv_${SLURM_JOB_ID:-manual}"
+if [ ! -d "${VENV_DIR}" ]; then
+    python3 -m venv --system-site-packages "${VENV_DIR}" || true
+fi
+if [ -f "${VENV_DIR}/bin/activate" ]; then
+    source "${VENV_DIR}/bin/activate"
+fi
+pip install --no-index pyyaml jinja2 future 2>/dev/null || true
+
 # Print GPU architecture & specifications
 nvidia-smi
 

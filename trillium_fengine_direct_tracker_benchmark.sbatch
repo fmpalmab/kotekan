@@ -41,13 +41,19 @@ cmake --version | head -n 1
 python3 --version | head -n 1
 nvidia-smi
 
-export PATH="$HOME/.local/bin:$PATH"
-export PYTHONPATH="$HOME/.local/lib/python3.11/site-packages:${PYTHONPATH:-}"
+# Setup high-speed scratch virtual environment inheriting CVMFS modules (numpy, scipy, matplotlib, h5py)
+VENV_DIR="${SLURM_TMPDIR:-/tmp}/kotekan_pyenv_${SLURM_JOB_ID:-manual}"
+if [ ! -d "${VENV_DIR}" ]; then
+    python3 -m venv --system-site-packages "${VENV_DIR}" || true
+fi
+if [ -f "${VENV_DIR}/bin/activate" ]; then
+    source "${VENV_DIR}/bin/activate"
+fi
 
 # Install missing Python packages using CVMFS offline wheelhouse (--no-index)
 if ! python3 -c "import yaml, jinja2, h5py, matplotlib" 2>/dev/null; then
-    echo "Installing missing python runtime packages (pyyaml, jinja2, h5py, matplotlib) via offline CVMFS wheelhouse..."
-    pip install --no-index --user pyyaml jinja2 h5py matplotlib || true
+    echo "Installing missing python runtime packages (pyyaml, jinja2, future) via offline CVMFS wheelhouse..."
+    pip install --no-index pyyaml jinja2 future || pip install pyyaml jinja2 future || true
 fi
 
 # ============================================================================

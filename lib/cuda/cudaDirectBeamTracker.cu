@@ -94,7 +94,7 @@ __global__ void generate_steering_weights_kernel(
     }
 
     const DirectDirection3D dir = directions[beam];
-    const float3 pos = __ldg(&antenna_positions[ant]);
+    const float3 pos = antenna_positions[ant];
     const double wave_num = __ldg(&wavenumbers[freq]);
 
     const double delay_m = static_cast<double>(pos.x) * dir.x +
@@ -150,7 +150,7 @@ __global__ void precompute_sky_grid_kernel(
     const float trans_sq = l * l + m * m;
     const float n = (trans_sq <= 1.0f) ? sqrtf(1.0f - trans_sq) : 0.0f;
 
-    const float3 pos = __ldg(&antenna_positions[ant]);
+    const float3 pos = antenna_positions[ant];
     const double wave_num = __ldg(&wavenumbers[freq]);
 
     const double delay_m = static_cast<double>(pos.x) * l +
@@ -508,7 +508,7 @@ void launch_precompute_sky_grid(
     precompute_sky_grid_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
         d_grid_weights,
         d_grid_lms,
-        wavenumbers,
+        d_wavenumbers,
         d_antenna_positions,
         d_antenna_mask,
         d_calibration_gains,

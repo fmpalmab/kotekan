@@ -101,7 +101,7 @@ tracker_v5_multibeam_kernel(
             w_i[a] = 0.0F;
             nw_i[a] = 0.0F;
         } else {
-            const float3 pos = __ldg(&antenna_positions[elem]);
+            const float3 pos = antenna_positions[elem];
             tracker_weight_v5(pos, direction, wave_number, &w_r[a], &w_i[a]);
             nw_i[a] = -w_i[a];
         }
@@ -423,6 +423,7 @@ struct CudaBeamTrackerV5Stream::Impl {
     float* d_window_directions = nullptr;
     double* d_wavenumbers = nullptr;
     std::uint8_t* d_antenna_mask = nullptr;
+    float3* d_antenna_positions = nullptr;
 
     cudaEvent_t start_event = nullptr;
     cudaEvent_t stop_event = nullptr;

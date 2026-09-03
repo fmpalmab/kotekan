@@ -272,7 +272,7 @@ cudaDirectBeamTrackerCommand::cudaDirectBeamTrackerCommand(
             rest.register_post_callback("/beam_tracker/mask_antenna", mask_ant_cb);
 
             // 5. Status Telemetry
-            auto status_cb = [this](connectionInstance& conn, nlohmann::json&) {
+            auto status_cb = [this](connectionInstance& conn) {
                 nlohmann::json reply;
                 std::lock_guard<std::mutex> lk(_global_mutex);
 
