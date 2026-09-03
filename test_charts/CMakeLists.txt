@@ -64,4 +64,34 @@ if(CUDAToolkit_FOUND)
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib
         ${CMAKE_CURRENT_SOURCE_DIR}/../external/json
         ${CMAKE_CURRENT_SOURCE_DIR}/../external/fmt)
+
+    # Benchmark Direct Beam Tracker (Zero Integration Window)
+    add_executable(benchmark_direct_beam_tracker benchmark_direct_beam_tracker.cpp)
+    target_link_libraries(
+        benchmark_direct_beam_tracker
+        PRIVATE -Wl,--whole-archive $<TARGET_PROPERTY:kotekan_libs,INTERFACE_LINK_LIBRARIES>
+                -Wl,--no-whole-archive)
+    target_include_directories(benchmark_direct_beam_tracker PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/cuda
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/metadata
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/utils
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib
+        ${CMAKE_CURRENT_SOURCE_DIR}/../external/json
+        ${CMAKE_CURRENT_SOURCE_DIR}/../external/fmt)
+
+    # Head-to-Head Comparative Benchmark: Beam Tracker V5 vs. Direct Beam Tracker
+    add_executable(benchmark_tracker_v5_vs_direct benchmark_tracker_v5_vs_direct.cpp)
+    target_link_libraries(
+        benchmark_tracker_v5_vs_direct
+        PRIVATE -Wl,--whole-archive $<TARGET_PROPERTY:kotekan_libs,INTERFACE_LINK_LIBRARIES>
+                -Wl,--no-whole-archive)
+    target_include_directories(benchmark_tracker_v5_vs_direct PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/cuda
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/metadata
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/utils
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib
+        ${CMAKE_CURRENT_SOURCE_DIR}/../external/json
+        ${CMAKE_CURRENT_SOURCE_DIR}/../external/fmt)
 endif()

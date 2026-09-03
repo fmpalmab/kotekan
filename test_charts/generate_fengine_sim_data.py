@@ -202,6 +202,8 @@ def save_to_hdf5(filepath: str, packed_data: np.ndarray, freqs_hz: np.ndarray, m
     n_time, n_freq, n_ant = packed_data.shape
 
     # Transpose from [Time, Freq, Antenna] to [Antenna, Freq, Time] for standard HDF5 baseband dataset
+    h5_array = np.transpose(packed_data, (2, 1, 0))
+
     if h5py is None:
         raise ImportError("h5py is required to save HDF5 format. Install via: pip install h5py")
 

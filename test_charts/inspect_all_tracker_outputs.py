@@ -86,9 +86,11 @@ def inspect_binary_dump(file_path, n_time=15360, n_freq=336, max_beams=4):
 
 def main():
     dirs = [
-        ("/tmp/test_charts_tracker", "64 Antennas"),
-        ("/tmp/test_charts_tracker_128", "128 Antennas"),
-        ("/tmp/test_charts_tracker_256", "256 Antennas"),
+        ("/tmp/test_charts_tracker", "64 Antennas (V5 Baseline)"),
+        ("/tmp/test_charts_tracker_128", "128 Antennas (V5 Baseline)"),
+        ("/tmp/test_charts_tracker_256", "256 Antennas (V5 Baseline)"),
+        ("/tmp/test_charts_direct_tracker_64", "64 Antennas (Direct Beam Tracker)"),
+        ("/tmp/test_charts_direct_tracker_256", "256 Antennas (Direct Beam Tracker)"),
     ]
     
     all_ok = True
