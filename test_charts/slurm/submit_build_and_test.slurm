@@ -48,7 +48,7 @@ cmake .. \
     -DCMAKE_CUDA_ARCHITECTURES="80;90"
 
 echo ">>> Compiling Kotekan & Test Targets..."
-make -j${SLURM_CPUS_PER_TASK:-8} kotekan test_beam_tracker_suite test_chaos_engineering benchmark_kotekan_cuda_tracker_v5 benchmark_pipeline_stages
+make -j${SLURM_CPUS_PER_TASK:-8} kotekan test_beam_tracker_suite test_chaos_engineering benchmark_kotekan_cuda_tracker_v5 benchmark_pipeline_stages benchmark_direct_beam_tracker benchmark_tracker_v5_vs_direct
 
 echo "======================================================================"
 echo " 1. Running Comprehensive Beam Tracker Test Suite (64, 128, 256 Ants)"
@@ -69,6 +69,16 @@ echo "======================================================================"
 echo " 4. Running End-to-End Pipeline Stage Latency Benchmarks"
 echo "======================================================================"
 ./test_charts/benchmark_pipeline_stages
+
+echo "======================================================================"
+echo " 5. Running Direct Beam Tracker (Zero-Window) Benchmarks"
+echo "======================================================================"
+./test_charts/benchmark_direct_beam_tracker
+
+echo "======================================================================"
+echo " 6. Running Head-to-Head Comparative Benchmark (Direct vs V5)"
+echo "======================================================================"
+./test_charts/benchmark_tracker_v5_vs_direct
 
 echo "======================================================================"
 echo " All Trillium Batch Jobs & Verification Steps Completed Successfully!"

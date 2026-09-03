@@ -32,7 +32,13 @@ Manifest*.toml
 
 # Benchmark & simulation results, reports, and logs
 *.csv
-test_charts/*.json
+*.err
+slurm-*.out
+slurm_*.out
+direct_vs_v5_*.out
+direct_vs_v5_*.err
+tracker_benchmark_comparison.json
+*.json
 test_charts/*_report.json
 test_charts/*_report.md
 test_charts/tracker_benchmark_report.md
