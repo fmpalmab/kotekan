@@ -69,4 +69,11 @@ if(CUDAToolkit_FOUND)
         ${COMMON_TEST_SRCS})
     target_link_libraries(test_antenna_masking_stage PRIVATE CUDA::cudart Threads::Threads)
     target_include_directories(test_antenna_masking_stage PRIVATE ${COMMON_INCLUDE_DIRS})
+
+    # 8. Big Master Pipeline Test: Masking Stage -> Direct Beam Tracker
+    add_executable(benchmark_pipeline_masking_direct
+        benchmark_pipeline_masking_direct.cpp
+        ${COMMON_TEST_SRCS})
+    target_link_libraries(benchmark_pipeline_masking_direct PRIVATE CUDA::cudart Threads::Threads)
+    target_include_directories(benchmark_pipeline_masking_direct PRIVATE ${COMMON_INCLUDE_DIRS})
 endif()
