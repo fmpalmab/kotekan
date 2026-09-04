@@ -69,6 +69,16 @@ struct DirectBeamTrackerConfig {
                                               0.0f);
         }
     }
+    void set_antenna_grid(std::size_t n_ant, float spacing) {
+        spacing_m = spacing;
+        for (std::size_t i = 0; i < MAX_DIRECT_ANTENNAS; ++i) {
+            const unsigned int col = (n_ant <= 64) ? (i & 7U) : (i & 15U);
+            const unsigned int row = (n_ant <= 64) ? (i >> 3U) : (i >> 4U);
+            antenna_positions[i] = make_float3(static_cast<float>(col) * spacing_m,
+                                              static_cast<float>(row) * spacing_m,
+                                              0.0f);
+        }
+    }
 };
 
 /**

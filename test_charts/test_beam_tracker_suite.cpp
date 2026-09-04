@@ -1,4 +1,5 @@
 #include "cudaBeamTrackerV5.hpp"
+#include "cudaDirectBeamTracker.hpp"
 #include "DataType.hpp"
 #include "kotekanLogging.hpp"
 
@@ -66,6 +67,14 @@ inline void get_antenna_pos(std::size_t n_ant, std::size_t element, float spacin
     } else { // 128 or 256 antennas (16 columns)
         x = static_cast<float>(element & 15U) * spacing_m;
         y = static_cast<float>(element >> 4U) * spacing_m;
+    }
+}
+
+inline void populate_antenna_positions(kotekan::MultiBeamTrackerConfig& config, std::size_t n_ant) {
+    for (std::size_t a = 0; a < n_ant; ++a) {
+        float x = 0.0f, y = 0.0f;
+        get_antenna_pos(n_ant, a, config.spacing_m, x, y);
+        config.antenna_positions[a] = make_float3(x, y, 0.0f);
     }
 }
 
@@ -294,6 +303,179 @@ ValidationMetrics verify_voltages(
 }
 
 // ============================================================================
+// DIRECT BEAM TRACKER (Zero Integration Window) Verification
+// ============================================================================
+
+TestResult test_direct_beam_tracker_accuracy(
+    std::size_t n_ant,
+    std::size_t n_time = 3840,
+    std::size_t n_freq = 336,
+    std::size_t max_beams = 4,
+    std::size_t active_beams = 4) {
+
+    TestResult res;
+    res.test_name = "[Direct] Numerical Accuracy (CPU Double Ref)";
+    res.n_ant = n_ant;
+    res.n_time = n_time;
+    res.n_freq = n_freq;
+    res.n_beams = active_beams;
+
+    const float spacing_m = 0.6f;
+    std::vector<double> freqs(n_freq);
+    for (std::size_t f = 0; f < n_freq; ++f) {
+        freqs[f] = 300.0e6 + f * 300.0e3;
+    }
+
+    std::vector<PointSource> sources;
+    for (std::size_t b = 0; b < active_beams; ++b) {
+        PointSource src;
+        src.l0 = static_cast<float>(b) * 0.015f;
+        src.m0 = static_cast<float>(b) * -0.010f;
+        src.dl = 0.0f;
+        src.dm = 0.0f;
+        src.amplitude = 3.0f;
+        sources.push_back(src);
+    }
+
+    const auto host_packed = simulate_rfsoc_ingest_and_shuffle(
+        n_time, n_freq, n_ant, freqs, sources, 0.5f, spacing_m);
+
+    std::vector<kotekan::DirectDirection3D> h_dirs(max_beams);
+    for (std::size_t b = 0; b < active_beams; ++b) {
+        const float l = sources[b].l0;
+        const float m = sources[b].m0;
+        const float r2 = l * l + m * m;
+        h_dirs[b] = kotekan::DirectDirection3D{l, m, (r2 <= 1.0f) ? std::sqrt(1.0f - r2) : 0.0f};
+    }
+    for (std::size_t b = active_beams; b < max_beams; ++b) {
+        h_dirs[b] = kotekan::DirectDirection3D{0.0f, 0.0f, 1.0f};
+    }
+
+    std::vector<double> h_wavenumbers(n_freq);
+    for (std::size_t f = 0; f < n_freq; ++f) {
+        h_wavenumbers[f] = TWO_PI * freqs[f] / SPEED_OF_LIGHT;
+    }
+
+    std::vector<float3> h_positions(n_ant);
+    for (std::size_t a = 0; a < n_ant; ++a) {
+        float x = 0.0f, y = 0.0f;
+        get_antenna_pos(n_ant, a, spacing_m, x, y);
+        h_positions[a] = make_float3(x, y, 0.0f);
+    }
+
+    // Generate weights on CPU
+    std::vector<float2> h_weights(max_beams * n_freq * n_ant);
+    for (std::size_t b = 0; b < max_beams; ++b) {
+        for (std::size_t f = 0; f < n_freq; ++f) {
+            for (std::size_t a = 0; a < n_ant; ++a) {
+                const double delay_m = static_cast<double>(h_positions[a].x) * h_dirs[b].x +
+                                       static_cast<double>(h_positions[a].y) * h_dirs[b].y;
+                const double phase = h_wavenumbers[f] * delay_m;
+                h_weights[(b * n_freq + f) * n_ant + a] = make_float2(
+                    static_cast<float>(std::cos(phase)),
+                    static_cast<float>(std::sin(phase)));
+            }
+        }
+    }
+
+    const std::size_t eval_samples = std::min(n_time, std::size_t(512));
+    std::vector<float2> cpu_ref(eval_samples * n_freq * max_beams);
+    for (std::size_t t = 0; t < eval_samples; ++t) {
+        for (std::size_t f = 0; f < n_freq; ++f) {
+            for (std::size_t b = 0; b < active_beams; ++b) {
+                double sum_r = 0.0;
+                double sum_i = 0.0;
+                const std::size_t w_base = (b * n_freq + f) * n_ant;
+                for (std::size_t a = 0; a < n_ant; ++a) {
+                    const float2 w = h_weights[w_base + a];
+                    const uint8_t byte_val = host_packed[(t * n_freq + f) * n_ant + a].val;
+                    int v_r = static_cast<int>(byte_val & 0x0F);
+                    if (v_r >= 8) v_r -= 16;
+                    int v_i = static_cast<int>((byte_val >> 4) & 0x0F);
+                    if (v_i >= 8) v_i -= 16;
+
+                    sum_r += static_cast<double>(w.x) * v_r - static_cast<double>(w.y) * v_i;
+                    sum_i += static_cast<double>(w.x) * v_i + static_cast<double>(w.y) * v_r;
+                }
+                cpu_ref[(t * n_freq + f) * max_beams + b] =
+                    make_float2(static_cast<float>(sum_r), static_cast<float>(sum_i));
+            }
+        }
+    }
+
+    const std::size_t input_bytes = n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t);
+    const std::size_t output_bytes = n_time * n_freq * max_beams * sizeof(float2);
+    const std::size_t weights_bytes = max_beams * n_freq * n_ant * sizeof(float2);
+
+    kotekan::int4x2_t* d_packed = nullptr;
+    float2* d_voltages = nullptr;
+    float2* d_weights = nullptr;
+    kotekan::DirectDirection3D* d_dirs = nullptr;
+    double* d_wavenumbers = nullptr;
+    float3* d_positions = nullptr;
+
+    cudaMalloc(&d_packed, input_bytes);
+    cudaMalloc(&d_voltages, output_bytes);
+    cudaMalloc(&d_weights, weights_bytes);
+    cudaMalloc(&d_dirs, max_beams * sizeof(kotekan::DirectDirection3D));
+    cudaMalloc(&d_wavenumbers, n_freq * sizeof(double));
+    cudaMalloc(&d_positions, n_ant * sizeof(float3));
+
+    cudaMemcpy(d_packed, host_packed.data(), input_bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_dirs, h_dirs.data(), max_beams * sizeof(kotekan::DirectDirection3D), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_wavenumbers, h_wavenumbers.data(), n_freq * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_positions, h_positions.data(), n_ant * sizeof(float3), cudaMemcpyHostToDevice);
+
+    cudaStream_t stream;
+    cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+
+    kotekan::launch_generate_steering_weights(
+        d_weights, d_dirs, d_wavenumbers, d_positions, nullptr, nullptr,
+        max_beams, n_freq, n_ant, stream);
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    cudaEventRecord(start, stream);
+    kotekan::launch_direct_beamformer(
+        d_packed, d_weights, d_voltages, n_time, n_freq, n_ant, active_beams, max_beams, 256, 4, 4, stream);
+    cudaEventRecord(stop, stream);
+    cudaEventSynchronize(stop);
+
+    float elapsed_ms = 0.0f;
+    cudaEventElapsedTime(&elapsed_ms, start, stop);
+    res.kernel_time_ms = elapsed_ms;
+
+    const double data_gb = static_cast<double>(input_bytes) / (1024.0 * 1024.0 * 1024.0);
+    res.throughput_gb_s = data_gb / (elapsed_ms / 1000.0);
+
+    std::vector<float2> gpu_out(eval_samples * n_freq * max_beams);
+    cudaMemcpy(gpu_out.data(), d_voltages, eval_samples * n_freq * max_beams * sizeof(float2), cudaMemcpyDeviceToHost);
+
+    const auto metrics = verify_voltages(cpu_ref.data(), gpu_out.data(), eval_samples * n_freq * max_beams);
+    res.passed = metrics.passed;
+
+    std::ostringstream ss;
+    ss << "RMS Error=" << std::scientific << std::setprecision(2) << metrics.rms_error
+       << ", MaxAbsErr=" << metrics.max_abs_error
+       << ", Mismatches=" << metrics.mismatch_count;
+    res.details = ss.str();
+
+    cudaFree(d_packed);
+    cudaFree(d_voltages);
+    cudaFree(d_weights);
+    cudaFree(d_dirs);
+    cudaFree(d_wavenumbers);
+    cudaFree(d_positions);
+    cudaStreamDestroy(stream);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    return res;
+}
+
+// ============================================================================
 // TEST 1: Numerical Accuracy across 64, 128, 256 Antennas & All Multi-Beams
 // ============================================================================
 
@@ -306,7 +488,7 @@ TestResult test_numerical_accuracy(
     int time_unroll = 8) {
 
     TestResult res;
-    res.test_name = "Numerical Accuracy & CPU Reference Equivalence (Complex Voltages)";
+    res.test_name = "[V5] Numerical Accuracy & CPU Reference Equivalence";
     res.n_ant = n_ant;
     res.n_time = n_time;
     res.n_freq = n_freq;
@@ -323,6 +505,7 @@ TestResult test_numerical_accuracy(
     config.spacing_m = 0.6f;
     config.time_chunk_size = 80;
     config.time_unroll = time_unroll;
+    populate_antenna_positions(config, n_ant);
 
     std::vector<PointSource> sources;
     for (std::size_t b = 0; b < active_beams; ++b) {
@@ -410,7 +593,7 @@ TestResult test_astronomical_coherent_gain_and_profile(
     std::size_t n_freq = 336) {
 
     TestResult res;
-    res.test_name = "Astronomical Validation: Coherent Gain (N_ant^2) & Sidelobe Rejection";
+    res.test_name = "[V5] Coherent Gain (N_ant^2) & Sidelobes";
     res.n_ant = n_ant;
     res.n_time = n_time;
     res.n_freq = n_freq;
@@ -439,6 +622,7 @@ TestResult test_astronomical_coherent_gain_and_profile(
     config.spacing_m = 0.6f;
     config.time_chunk_size = 80;
     config.time_unroll = 8;
+    populate_antenna_positions(config, n_ant);
 
     const float aperture_x = (n_ant <= 64 ? 7.0f : 15.0f) * config.spacing_m;
     const float lambda = static_cast<float>(SPEED_OF_LIGHT / freqs[0]);
@@ -527,7 +711,7 @@ TestResult test_multisource_independence(
     std::size_t n_freq = 336) {
 
     TestResult res;
-    res.test_name = "Multi-Source Independent Tracking (Zero Crosstalk)";
+    res.test_name = "[V5] Multi-Source Tracking (Zero Crosstalk)";
     res.n_ant = n_ant;
     res.n_time = n_time;
     res.n_freq = n_freq;
@@ -550,6 +734,7 @@ TestResult test_multisource_independence(
     config.spacing_m = 0.6f;
     config.time_chunk_size = 80;
     config.time_unroll = 8;
+    populate_antenna_positions(config, n_ant);
 
     config.trajectories[0].direction_start = {src1.l0, src1.m0, 1.0f};
     config.trajectories[0].direction_rate_per_sample = {src1.dl, src1.dm};
@@ -615,7 +800,7 @@ TestResult test_masking_stability(
     std::size_t n_freq = 336) {
 
     TestResult res;
-    res.test_name = "RFSoC Packet Loss & Zero-Masking Numerical Robustness";
+    res.test_name = "[V5] Packet Loss & Zero-Masking Robustness";
     res.n_ant = n_ant;
     res.n_time = n_time;
     res.n_freq = n_freq;
@@ -635,6 +820,7 @@ TestResult test_masking_stability(
     config.num_active_beams = 1;
     config.integration_spectra = 320;
     config.spacing_m = 0.6f;
+    populate_antenna_positions(config, n_ant);
     config.trajectories[0].direction_start = {src.l0, src.m0, 1.0f};
 
     const std::size_t total_out = n_time * n_freq;
@@ -679,7 +865,7 @@ TestResult test_dead_antenna_fault_tolerance(
     std::size_t n_freq = 336) {
 
     TestResult res;
-    res.test_name = "Dead Antenna Fault-Tolerance & Masking (" + std::to_string(dead_antenna_indices.size()) + " Dead Elements)";
+    res.test_name = "[V5] Dead Antenna Masking (" + std::to_string(dead_antenna_indices.size()) + " Dead)";
     res.n_ant = n_ant;
     res.n_time = n_time;
     res.n_freq = n_freq;
@@ -702,6 +888,7 @@ TestResult test_dead_antenna_fault_tolerance(
     config.spacing_m = 0.6f;
     config.time_chunk_size = 80;
     config.time_unroll = 8;
+    populate_antenna_positions(config, n_ant);
     config.trajectories[0].direction_start = {src.l0, src.m0, 1.0f};
     config.trajectories[0].direction_rate_per_sample = {src.dl, src.dm};
 
@@ -778,7 +965,7 @@ TestResult run_sustained_stress_test(
     std::size_t active_beams = 2) {
 
     TestResult res;
-    res.test_name = "Sustained High-Throughput Pipeline Stress Test";
+    res.test_name = "[V5] Sustained Pipeline Stress Test";
     res.n_ant = n_ant;
     res.n_time = n_time;
     res.n_freq = n_freq;
@@ -793,6 +980,7 @@ TestResult run_sustained_stress_test(
     config.spacing_m = 0.6f;
     config.time_chunk_size = 80;
     config.time_unroll = 8;
+    populate_antenna_positions(config, n_ant);
     for (std::size_t b = 0; b < active_beams; ++b) {
         config.trajectories[b].direction_start = {static_cast<float>(b) * 0.02f, 0.0f, 1.0f};
         config.trajectories[b].direction_rate_per_sample = {1.0e-5f, 0.0f};
@@ -933,6 +1121,10 @@ int main(int /*argc*/, char** /*argv*/) {
     for (std::size_t n_ant : antenna_configs) {
         std::cout << ">>> Running Test Suite for N_ANT = " << n_ant << " <<<\n";
 
+        // 0. Direct Beam Tracker: Exact Analytical CPU Double Reference Equivalence
+        results.push_back(test_direct_beam_tracker_accuracy(n_ant, 3840, 336, 4, 1));
+        results.push_back(test_direct_beam_tracker_accuracy(n_ant, 3840, 336, 4, 4));
+
         // 1. Numerical Accuracy across beam counts (1, 4, 8 beams)
         results.push_back(test_numerical_accuracy(n_ant, 3200, 336, 4, 1, 8));
         results.push_back(test_numerical_accuracy(n_ant, 3200, 336, 4, 4, 8));
@@ -966,16 +1158,16 @@ int main(int /*argc*/, char** /*argv*/) {
     }
 
     // Print Consolidated Summary Table
-    std::cout << "====================================================================================================\n";
-    std::cout << " TEST EXECUTION SUMMARY REPORT\n";
-    std::cout << "====================================================================================================\n";
+    std::cout << "========================================================================================================\n";
+    std::cout << " TEST EXECUTION SUMMARY REPORT (Beam Tracker V5 vs. Direct Beamformer)\n";
+    std::cout << "========================================================================================================\n";
     std::cout << "| " << std::left << std::setw(6) << "Ants"
               << "| " << std::setw(8) << "Beams"
               << "| " << std::setw(6) << "Status"
-              << "| " << std::setw(42) << "Test Category"
+              << "| " << std::setw(46) << "Test Category"
               << "| " << std::setw(30) << "Performance / Metrics"
               << "|\n";
-    std::cout << "----------------------------------------------------------------------------------------------------\n";
+    std::cout << "--------------------------------------------------------------------------------------------------------\n";
 
     bool all_passed = true;
     for (const auto& r : results) {
@@ -987,12 +1179,12 @@ int main(int /*argc*/, char** /*argv*/) {
         std::cout << "| " << std::left << std::setw(6) << r.n_ant
                   << "| " << std::setw(8) << beams_str
                   << "| " << std::setw(6) << status_str
-                  << "| " << std::setw(42) << r.test_name
+                  << "| " << std::setw(46) << r.test_name
                   << "| " << std::setw(30) << (r.kernel_time_ms > 0 ? (std::to_string(r.kernel_time_ms).substr(0, 5) + " ms (" + std::to_string(r.throughput_gb_s).substr(0, 5) + " GB/s)") : "Verified")
                   << "|\n";
         std::cout << "    Details: " << r.details << "\n";
     }
-    std::cout << "====================================================================================================\n";
+    std::cout << "========================================================================================================\n";
 
     if (all_passed) {
         std::cout << "\n>>> ALL TESTS PASSED! Beam Tracker Kernel & Pipeline are 100% STABLE and ACCURATE. <<<\n";
