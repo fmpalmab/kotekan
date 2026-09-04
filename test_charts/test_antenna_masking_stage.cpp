@@ -72,7 +72,7 @@ int main(int /*argc*/, char** /*argv*/) {
                 re = static_cast<std::int8_t>(std::clamp(std::round(gauss(rng)), -8.0f, 7.0f));
                 im = static_cast<std::int8_t>(std::clamp(std::round(gauss(rng)), -8.0f, 7.0f));
             }
-            h_voltages[s * n_ant + a] = kotekan::int4x2_t{re, im};
+            h_voltages[s * n_ant + a].val = static_cast<uint8_t>((re & 0x0F) | ((im & 0x0F) << 4));
         }
     }
 

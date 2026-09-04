@@ -63,12 +63,12 @@ void generate_test_frame(
             for (std::size_t a = 0; a < n_ant; ++a) {
                 if (is_dead[a]) {
                     // DEAD: purely zero (cable pulled / missing packet)
-                    data[s * n_ant + a] = kotekan::int4x2_t{0, 0};
+                    data[s * n_ant + a].val = 0;
                 } else if (is_saturated[a]) {
                     // SATURATED: severe ADC rail clipping (+7, -8) from intense terrestrial RFI
-                    std::int8_t r = (uni(rng) < 0.5f) ? 7 : -8;
-                    std::int8_t i = (uni(rng) < 0.5f) ? 7 : -8;
-                    data[s * n_ant + a] = kotekan::int4x2_t{r, i};
+                    const int r = (uni(rng) < 0.5f) ? 7 : -8;
+                    const int i = (uni(rng) < 0.5f) ? 7 : -8;
+                    data[s * n_ant + a].val = static_cast<uint8_t>((r & 0x0F) | ((i & 0x0F) << 4));
                 } else {
                     // HEALTHY: Gaussian background noise + coherent astronomical point source
                     const float3 pos = positions[a];
@@ -82,7 +82,7 @@ void generate_test_frame(
                     const int cl_r = std::max(-8, std::min(7, static_cast<int>(std::round(val_r))));
                     const int cl_i = std::max(-8, std::min(7, static_cast<int>(std::round(val_i))));
 
-                    data[s * n_ant + a] = kotekan::int4x2_t{static_cast<std::int8_t>(cl_r), static_cast<std::int8_t>(cl_i)};
+                    data[s * n_ant + a].val = static_cast<uint8_t>((cl_r & 0x0F) | ((cl_i & 0x0F) << 4));
                 }
             }
         }
