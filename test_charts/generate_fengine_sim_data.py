@@ -122,49 +122,55 @@ def generate_fengine_data(
         t_len = t_end - t_start
         t_chunk = np.arange(t_start, t_end, dtype=np.float64)
 
-        # Real and Imag components: (t_len, num_freq, num_antennas)
-        v_real = np.zeros((t_len, num_freq, num_antennas), dtype=np.float32)
-        v_imag = np.zeros((t_len, num_freq, num_antennas), dtype=np.float32)
-
-        # Add Noise
+        # Real and Imag components: (t_len, num_freq, num_antennas) in float32
         if noise_amp > 0.0:
-            v_real += np.random.normal(0.0, noise_amp, size=(t_len, num_freq, num_antennas)).astype(np.float32)
-            v_imag += np.random.normal(0.0, noise_amp, size=(t_len, num_freq, num_antennas)).astype(np.float32)
+            # Generate float32 noise directly without float64 intermediate
+            v_real = (np.random.randn(t_len, num_freq, num_antennas) * noise_amp).astype(np.float32)
+            v_imag = (np.random.randn(t_len, num_freq, num_antennas) * noise_amp).astype(np.float32)
+        else:
+            v_real = np.zeros((t_len, num_freq, num_antennas), dtype=np.float32)
+            v_imag = np.zeros((t_len, num_freq, num_antennas), dtype=np.float32)
+
+        # Pre-cast constants to float32
+        freqs_hz_f32 = freqs_hz.astype(np.float32)
+        pos_x_f32 = pos_x.astype(np.float32)
+        pos_y_f32 = pos_y.astype(np.float32)
+        c_inv = np.float32(1.0 / C_LIGHT)
+        two_pi_f32 = np.float32(2.0 * np.pi)
 
         # Add Sources
         for src in sources:
-            amp = src["amp"]
-            # Time-dependent direction cosines
-            l_t = src["l0"] + src["dl"] * t_chunk  # (t_len,)
-            m_t = src["m0"] + src["dm"] * t_chunk  # (t_len,)
+            amp = np.float32(src["amp"])
+            # Time-dependent direction cosines in float32
+            l_t = (src["l0"] + src["dl"] * t_chunk).astype(np.float32)  # (t_len,)
+            m_t = (src["m0"] + src["dm"] * t_chunk).astype(np.float32)  # (t_len,)
 
-            # Geometric delays: delay[t, a] = (pos_x[a] * l[t] + pos_y[a] * m[t]) / C
-            # Shape: (t_len, num_antennas)
-            delays = (np.outer(l_t, pos_x) + np.outer(m_t, pos_y)) / C_LIGHT
+            # Geometric delays in float32: (t_len, num_antennas)
+            delays = (np.outer(l_t, pos_x_f32) + np.outer(m_t, pos_y_f32)) * c_inv
 
             # Intrinsic source phase: base signal across time and frequency
             if src.get("is_frb", False):
-                # Quadratic dispersion delay: dt = 4.1488e-3 * DM * (1/f1^2 - 1/f0^2)
+                # Quadratic dispersion delay
                 f_ref = freqs_hz[-1]
-                dm_delays_s = 4.1488e-3 * 100.0 * (1.0 / (freqs_hz / 1e9)**2 - 1.0 / (f_ref / 1e9)**2)  # (num_freq,)
-                # Gaussian pulse profile in time
-                t_physical_s = t_chunk * dt_s  # (t_len,)
-                pulse_center = (num_time * dt_s) * 0.4
-                t_diff = (t_physical_s[:, None] - (pulse_center + dm_delays_s[None, :]))
-                pulse_width_s = 50.0 * dt_s
+                dm_delays_s = 4.1488e-3 * 100.0 * (1.0 / (freqs_hz / 1e9)**2 - 1.0 / (f_ref / 1e9)**2)
+                t_physical_s = (t_chunk * dt_s).astype(np.float32)
+                pulse_center = np.float32((num_time * dt_s) * 0.4)
+                t_diff = (t_physical_s[:, None] - (pulse_center + dm_delays_s[None, :].astype(np.float32)))
+                pulse_width_s = np.float32(50.0 * dt_s)
                 envelope = np.exp(-0.5 * (t_diff / pulse_width_s)**2).astype(np.float32)
                 
-                phase_base = 2.0 * np.pi * np.outer(t_chunk * 0.01, freqs_hz / 1e8)
-                geom_phase = 2.0 * np.pi * np.einsum('f,ta->tfa', freqs_hz, delays)
+                phase_base = two_pi_f32 * (np.outer((t_chunk * 0.01).astype(np.float32), freqs_hz_f32 / 1e8))
+                geom_phase = two_pi_f32 * (delays[:, None, :] * freqs_hz_f32[None, :, None])
                 total_phase = phase_base[:, :, None] - geom_phase
-                v_real += amp * envelope[:, :, None] * np.cos(total_phase).astype(np.float32)
-                v_imag += amp * envelope[:, :, None] * np.sin(total_phase).astype(np.float32)
+                v_real += amp * envelope[:, :, None] * np.cos(total_phase)
+                v_imag += amp * envelope[:, :, None] * np.sin(total_phase)
             else:
-                phase_base = 2.0 * np.pi * np.outer(t_chunk * 0.005, freqs_hz * 1e-8)  # (t_len, num_freq)
-                geom_phase = 2.0 * np.pi * np.einsum('f,ta->tfa', freqs_hz, delays)
+                phase_base = two_pi_f32 * (np.outer((t_chunk * 0.005).astype(np.float32), (freqs_hz_f32 * 1e-8)))
+                # Direct broadcasting (t_len, 1, num_ant) * (1, num_freq, 1) in float32
+                geom_phase = two_pi_f32 * (delays[:, None, :] * freqs_hz_f32[None, :, None])
                 total_phase = phase_base[:, :, None] - geom_phase
-                v_real += amp * np.cos(total_phase).astype(np.float32)
-                v_imag += amp * np.sin(total_phase).astype(np.float32)
+                v_real += amp * np.cos(total_phase)
+                v_imag += amp * np.sin(total_phase)
 
         # 4-bit Quantization [-7..+7] (int4x2_t: real in low 4 bits, imag in high 4 bits)
         r_quant = np.clip(np.round(v_real), -7, 7).astype(np.int8)

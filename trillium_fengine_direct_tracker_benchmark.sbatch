@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=24
-#SBATCH --time=01:00:00
+#SBATCH --time=03:00:00
 #SBATCH --output=kotekan_direct_tracker_%j.log
 
 set -euo pipefail
@@ -50,6 +50,10 @@ if [ -f "${VENV_DIR}/bin/activate" ]; then
     source "${VENV_DIR}/bin/activate"
 fi
 
+# Prevent matplotlib font-cache permission/lock issues on cluster compute nodes
+export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/matplotlib"
+mkdir -p "${MPLCONFIGDIR}"
+
 # Install missing Python packages using CVMFS offline wheelhouse (--no-index)
 if ! python3 -c "import yaml, jinja2, h5py, matplotlib" 2>/dev/null; then
     echo "Installing missing python runtime packages (pyyaml, jinja2, future) via offline CVMFS wheelhouse..."
@@ -77,9 +81,11 @@ else
     echo "[INFO] Julia binary not loaded in path. Using high-speed F-Engine Python simulation engine."
 fi
 
-REPO_ROOT="${SLURM_SUBMIT_DIR:-$PWD}"
-cd "${REPO_ROOT}"
-echo "Working Directory: ${REPO_ROOT}"
+# Optional Stage Filter:
+# Pass e.g. --export=ALL,RUN_STAGE="benchmark" to run ONLY the comparative benchmark,
+# or RUN_STAGE="fengine", RUN_STAGE="pipeline", RUN_STAGE="report", or "all" (default).
+RUN_STAGE="${RUN_STAGE:-all}"
+echo "Selected Pipeline Stage(s): ${RUN_STAGE}"
 
 # ============================================================================
 # 3. Build Kotekan Framework & Benchmarks
@@ -142,88 +148,100 @@ fi
 # ============================================================================
 # 5. Run Head-to-Head Comparative Benchmark (V5 vs Direct Beam Tracker)
 # ============================================================================
-echo "========================================="
-echo " 5. Running Head-to-Head Comparative Benchmark (Direct vs V5)"
-echo "========================================="
-"${BENCHMARK_BIN}"
+if [ "${RUN_STAGE}" = "all" ] || [ "${RUN_STAGE}" = "benchmark" ]; then
+    echo "========================================="
+    echo " 5. Running Head-to-Head Comparative Benchmark (Direct vs V5)"
+    echo "========================================="
+    "${BENCHMARK_BIN}"
+fi
 
 # ============================================================================
 # 6. Generate Synthetic F-Engine Datasets (64 & 256 Antennas)
 # ============================================================================
-echo "========================================="
-echo " 6. Generating Synthetic F-Engine Datasets (64 & 256 Antennas)"
-echo "========================================="
-mkdir -p test_charts/data
+if [ "${RUN_STAGE}" = "all" ] || [ "${RUN_STAGE}" = "fengine" ] || [ "${RUN_STAGE}" = "pipeline" ]; then
+    echo "========================================="
+    echo " 6. Generating Synthetic F-Engine Datasets (64 & 256 Antennas)"
+    echo "========================================="
+    if [ -f "test_charts/data/voltage_sim_64ant.h5" ] && [ -f "test_charts/data/voltage_sim_256ant.h5" ] && \
+       [ -f "test_charts/data/fengine_sim_64ant_moving.h5" ] && [ -f "test_charts/data/fengine_sim_256ant_moving.h5" ]; then
+        echo "[INFO] Synthetic F-Engine datasets already exist in test_charts/data/! Skipping regeneration to save ~36 minutes."
+    else
+        if [ "$HAS_JULIA" = true ]; then
+            echo "--- Running 64-Antenna Simulation in Julia (RadioTelescopeFEngine.jl) ---"
+            julia --project=test_charts/RadioTelescopeFEngine.jl test_charts/RadioTelescopeFEngine.jl/bin/run_charts_simulation.jl 64 test_charts/data/voltage_sim_64ant.h5
 
-if [ "$HAS_JULIA" = true ]; then
-    echo "--- Running 64-Antenna Simulation in Julia (RadioTelescopeFEngine.jl) ---"
-    julia --project=test_charts/RadioTelescopeFEngine.jl test_charts/RadioTelescopeFEngine.jl/bin/run_charts_simulation.jl 64 test_charts/data/voltage_sim_64ant.h5
+            echo "--- Running 256-Antenna Simulation in Julia (RadioTelescopeFEngine.jl) ---"
+            julia --project=test_charts/RadioTelescopeFEngine.jl test_charts/RadioTelescopeFEngine.jl/bin/run_charts_simulation.jl 256 test_charts/data/voltage_sim_256ant.h5
+        else
+            echo "--- Running 64-Antenna F-Engine Simulation (Python Engine) ---"
+            python3 test_charts/generate_fengine_sim_data.py --antennas 64 --scenario zenith --output test_charts/data/voltage_sim_64ant.h5
 
-    echo "--- Running 256-Antenna Simulation in Julia (RadioTelescopeFEngine.jl) ---"
-    julia --project=test_charts/RadioTelescopeFEngine.jl test_charts/RadioTelescopeFEngine.jl/bin/run_charts_simulation.jl 256 test_charts/data/voltage_sim_256ant.h5
-else
-    echo "--- Running 64-Antenna F-Engine Simulation (Python Engine) ---"
-    python3 test_charts/generate_fengine_sim_data.py --antennas 64 --scenario zenith --output test_charts/data/voltage_sim_64ant.h5
+            echo "--- Running 256-Antenna F-Engine Simulation (Python Engine) ---"
+            python3 test_charts/generate_fengine_sim_data.py --antennas 256 --scenario zenith --output test_charts/data/voltage_sim_256ant.h5
+        fi
 
-    echo "--- Running 256-Antenna F-Engine Simulation (Python Engine) ---"
-    python3 test_charts/generate_fengine_sim_data.py --antennas 256 --scenario zenith --output test_charts/data/voltage_sim_256ant.h5
+        echo "--- Generating Dynamic Moving Celestial Target Scenarios ---"
+        python3 test_charts/generate_fengine_sim_data.py --antennas 64 --scenario moving --output test_charts/data/fengine_sim_64ant_moving.h5
+        python3 test_charts/generate_fengine_sim_data.py --antennas 256 --scenario moving --output test_charts/data/fengine_sim_256ant_moving.h5
+    fi
 fi
-
-echo "--- Generating Dynamic Moving Celestial Target Scenarios ---"
-python3 test_charts/generate_fengine_sim_data.py --antennas 64 --scenario moving --output test_charts/data/fengine_sim_64ant_moving.h5
-python3 test_charts/generate_fengine_sim_data.py --antennas 256 --scenario moving --output test_charts/data/fengine_sim_256ant_moving.h5
 
 # ============================================================================
 # 7. Run F-Engine to Direct Beam Tracker Simulation & V5 Comparison
 # ============================================================================
-echo "========================================="
-echo " 7. Verifying F-Engine Simulation into Direct Beam Tracker vs V5 Baseline"
-echo "========================================="
-python3 test_charts/test_fengine_direct_tracker.py test_charts/data/voltage_sim_64ant.h5 --plot-out "fengine_direct_vs_v5_64ant_zenith_${SLURM_JOB_ID}.png"
-python3 test_charts/test_fengine_direct_tracker.py test_charts/data/voltage_sim_256ant.h5 --plot-out "fengine_direct_vs_v5_256ant_zenith_${SLURM_JOB_ID}.png"
+if [ "${RUN_STAGE}" = "all" ] || [ "${RUN_STAGE}" = "fengine" ]; then
+    echo "========================================="
+    echo " 7. Verifying F-Engine Simulation into Direct Beam Tracker vs V5 Baseline"
+    echo "========================================="
+    python3 test_charts/test_fengine_direct_tracker.py test_charts/data/voltage_sim_64ant.h5 --plot-out "fengine_direct_vs_v5_64ant_zenith_${SLURM_JOB_ID}.png"
+    python3 test_charts/test_fengine_direct_tracker.py test_charts/data/voltage_sim_256ant.h5 --plot-out "fengine_direct_vs_v5_256ant_zenith_${SLURM_JOB_ID}.png"
 
-python3 test_charts/test_fengine_direct_tracker.py test_charts/data/fengine_sim_64ant_moving.h5 --plot-out "fengine_direct_vs_v5_64ant_moving_${SLURM_JOB_ID}.png"
-python3 test_charts/test_fengine_direct_tracker.py test_charts/data/fengine_sim_256ant_moving.h5 --plot-out "fengine_direct_vs_v5_256ant_moving_${SLURM_JOB_ID}.png"
+    python3 test_charts/test_fengine_direct_tracker.py test_charts/data/fengine_sim_64ant_moving.h5 --plot-out "fengine_direct_vs_v5_64ant_moving_${SLURM_JOB_ID}.png"
+    python3 test_charts/test_fengine_direct_tracker.py test_charts/data/fengine_sim_256ant_moving.h5 --plot-out "fengine_direct_vs_v5_256ant_moving_${SLURM_JOB_ID}.png"
+fi
 
 # ============================================================================
 # 8. Run Full Kotekan Pipelines with Direct Beam Tracker (64 & 256 Antennas)
 # ============================================================================
-echo "========================================="
-echo " 8. Running Streaming Kotekan Pipelines with Direct Beam Tracker (64 & 256 Antennas)"
-echo "========================================="
-mkdir -p /tmp/test_charts_direct_tracker_64
-rm -f /tmp/test_charts_direct_tracker_64/*.bin
+if [ "${RUN_STAGE}" = "all" ] || [ "${RUN_STAGE}" = "pipeline" ]; then
+    echo "========================================="
+    echo " 8. Running Streaming Kotekan Pipelines with Direct Beam Tracker (64 & 256 Antennas)"
+    echo "========================================="
+    mkdir -p /tmp/test_charts_direct_tracker_64
+    rm -f /tmp/test_charts_direct_tracker_64/*.bin
 
-mkdir -p /tmp/test_charts_direct_tracker_256
-rm -f /tmp/test_charts_direct_tracker_256/*.bin
+    mkdir -p /tmp/test_charts_direct_tracker_256
+    rm -f /tmp/test_charts_direct_tracker_256/*.bin
 
-if [ -f "./build/kotekan/kotekan" ]; then
-    echo "--- Executing 64-Antenna Direct Beam Tracker Pipeline ---"
-    LD_LIBRARY_PATH="$PWD/build/external/n2k:${LD_LIBRARY_PATH:-}" ./build/kotekan/kotekan --config test_charts/config/64antennas_direct_tracker_test.yaml
+    if [ -f "./build/kotekan/kotekan" ]; then
+        echo "--- Executing 64-Antenna Direct Beam Tracker Pipeline ---"
+        LD_LIBRARY_PATH="$PWD/build/external/n2k:${LD_LIBRARY_PATH:-}" ./build/kotekan/kotekan --config test_charts/config/64antennas_direct_tracker_test.yaml
 
-    echo "--- Executing 256-Antenna Direct Beam Tracker Pipeline ---"
-    LD_LIBRARY_PATH="$PWD/build/external/n2k:${LD_LIBRARY_PATH:-}" ./build/kotekan/kotekan --config test_charts/config/256antennas_direct_tracker_test.yaml
-else
-    echo "[WARN] Kotekan binary not found; skipping streaming pipeline execution."
+        echo "--- Executing 256-Antenna Direct Beam Tracker Pipeline ---"
+        LD_LIBRARY_PATH="$PWD/build/external/n2k:${LD_LIBRARY_PATH:-}" ./build/kotekan/kotekan --config test_charts/config/256antennas_direct_tracker_test.yaml
+    else
+        echo "[WARN] Kotekan binary not found; skipping streaming pipeline execution."
+    fi
+
+    echo "========================================="
+    echo " 9. Inspecting Formed Complex Voltage Dumps"
+    echo "========================================="
+    python3 test_charts/inspect_all_tracker_outputs.py
 fi
-
-# ============================================================================
-# 9. Inspect Generated Complex Voltage Dumps
-# ============================================================================
-echo "========================================="
-echo " 9. Inspecting Formed Complex Voltage Dumps"
-echo "========================================="
-python3 test_charts/inspect_all_tracker_outputs.py
 
 # ============================================================================
 # 10. Generate Benchmark Comparison Plots & Markdown Report
 # ============================================================================
-echo "========================================="
-echo " 10. Generating Benchmark Visualizations & Markdown Report"
-echo "========================================="
-python3 test_charts/compare_tracker_benchmarks.py tracker_benchmark_comparison.json \
-    --plot-out "direct_vs_v5_benchmark_${SLURM_JOB_ID}.png" \
-    --md-out "tracker_benchmark_report_${SLURM_JOB_ID}.md"
+if [ "${RUN_STAGE}" = "all" ] || [ "${RUN_STAGE}" = "benchmark" ] || [ "${RUN_STAGE}" = "report" ]; then
+    if [ -f "tracker_benchmark_comparison.json" ]; then
+        echo "========================================="
+        echo " 10. Generating Benchmark Visualizations & Markdown Report"
+        echo "========================================="
+        python3 test_charts/compare_tracker_benchmarks.py tracker_benchmark_comparison.json \
+            --plot-out "direct_vs_v5_benchmark_${SLURM_JOB_ID}.png" \
+            --md-out "tracker_benchmark_report_${SLURM_JOB_ID}.md"
+    fi
+fi
 
 echo "======================================================================"
 echo " ALL TESTS, SIMULATIONS, AND BENCHMARK COMPARISONS COMPLETED SUCCESSFULLY!"

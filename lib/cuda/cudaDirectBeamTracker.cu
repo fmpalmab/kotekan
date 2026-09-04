@@ -49,13 +49,9 @@ int lookup_nearest_sky_grid(float l, float m, const std::vector<float2>& grid_di
 
 namespace {
 
-__device__ __forceinline__ float2 unpack_int4_streaming(const std::uint8_t* ptr) {
+__device__ __forceinline__ float2 unpack_int4_direct(const std::uint8_t* ptr) {
 #if defined(__CUDA_ARCH__)
-    std::uint32_t byte_val;
-    // Cache streaming modifier (ld.global.cs):
-    // Instructs Blackwell / Ada cache controller to evict streaming data first,
-    // preventing the 3.3 GB input frame from evicting weights and sky grid from L2 cache.
-    asm("ld.global.cs.u8 %0, [%1];" : "=r"(byte_val) : "l"(ptr));
+    const std::uint32_t byte_val = static_cast<std::uint32_t>(__ldg(ptr));
     int r, i;
     asm("bfe.s32 %0, %1, 0, 4;" : "=r"(r) : "r"(byte_val));
     asm("bfe.s32 %0, %1, 4, 4;" : "=r"(i) : "r"(byte_val));
@@ -175,7 +171,7 @@ __global__ void precompute_sky_grid_kernel(
 }
 
 template <int N_ANT, int B_TILE, int TIME_UNROLL>
-__global__ void __launch_bounds__(256, 4)
+__global__ void __launch_bounds__(128, 2)
 direct_beamformer_fused_multibeam_kernel(
     float2* __restrict__ voltages,
     const float2* __restrict__ weights,
@@ -263,8 +259,8 @@ direct_beamformer_fused_multibeam_kernel(
 
             #pragma unroll
             for (int k = 0; k < TIME_UNROLL; ++k) {
-                // LOAD RAW VOLTAGE SAMPLE ONCE WITH NON-TEMPORAL CACHE STREAMING (ld.global.cs)
-                const float2 p = unpack_int4_streaming(&packed_ptr[k * t_stride + a_offset]);
+                // LOAD RAW VOLTAGE SAMPLE ONCE WITH FAST UNPACK
+                const float2 p = unpack_int4_direct(&packed_ptr[k * t_stride + a_offset]);
 
                 // MULTIPLY-ACCUMULATE ACROSS ALL B_TILE BEAMS SIMULTANEOUSLY
                 #pragma unroll
@@ -311,7 +307,7 @@ direct_beamformer_fused_multibeam_kernel(
 
         #pragma unroll
         for (unsigned int a = 0; a < ANT_PER_LANE; ++a) {
-            const float2 p = unpack_int4_streaming(&packed_ptr[a * 32U]);
+            const float2 p = unpack_int4_direct(&packed_ptr[a * 32U]);
 
             #pragma unroll
             for (int b = 0; b < B_TILE; ++b) {
@@ -390,12 +386,24 @@ void launch_direct_beamformer(
     const std::size_t active_beams = std::min(num_active_beams, MAX_DIRECT_BEAMS);
     const std::size_t stride_beams = std::max(max_beams_stride, active_beams);
 
-    // Auto-select optimal B_TILE (4, 2, or 1) based on active beam count
+    // Auto-select optimal B_TILE (4, 2, or 1) based on active beam count and antenna count.
+    // For n_ant >= 256, ANT_PER_LANE=8, so B_TILE=4 would require 96 weight registers,
+    // spilling to local memory. Clamping B_TILE keeps all weights in registers.
     std::size_t b_tile = 1;
     if (beam_tile_size >= 4 && active_beams >= 4) {
-        b_tile = 4;
+        if (n_ant <= 64) {
+            b_tile = 4;
+        } else if (n_ant <= 128) {
+            b_tile = 2;
+        } else {
+            b_tile = 1;
+        }
     } else if (beam_tile_size >= 2 && active_beams >= 2) {
-        b_tile = 2;
+        if (n_ant <= 128) {
+            b_tile = 2;
+        } else {
+            b_tile = 1;
+        }
     }
 
     const std::size_t num_chunks = (n_time + time_chunk_size - 1) / time_chunk_size;
