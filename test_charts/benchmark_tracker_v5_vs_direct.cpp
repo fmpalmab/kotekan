@@ -2,6 +2,7 @@
 #include "cudaDirectBeamTracker.hpp"
 #include "DataType.hpp"
 #include "chartsConstants.hpp"
+#include "cudaUtils.hpp"
 
 #include <cuda_runtime.h>
 #include <algorithm>
@@ -138,8 +139,10 @@ void run_comparison_benchmark(
     kotekan::launch_generate_steering_weights(
         d_direct_weights, d_direct_dirs, d_wavenumbers, d_positions, nullptr, nullptr,
         max_beams_stride, n_freq, n_ant, stream);
-    kotekan::set_l2_persisting_weights_policy(stream, d_direct_weights, weights_bytes);
-    cudaStreamSynchronize(stream);
+    CHECK_CUDA_ERROR_NON_OO(cudaGetLastError());
+    // Opt-in persisting L2 policy (safely omitted to prevent driver reject on consumer GPUs)
+    // kotekan::set_l2_persisting_weights_policy(stream, d_direct_weights, weights_bytes);
+    CHECK_CUDA_ERROR_NON_OO(cudaStreamSynchronize(stream));
 
     // Setup V5 Config (Windowed Baseline)
     kotekan::BeamTrackerConfig v5_config;
@@ -161,16 +164,19 @@ void run_comparison_benchmark(
     // 1. Numerical Parity Check (Beam 0, stationary)
     // -------------------------------------------------------------------------
     kotekan::launch_beam_tracker_v5(d_packed, d_v5_voltages, n_time, n_freq, n_ant, h_frequencies, v5_config, stream);
+    CHECK_CUDA_ERROR_NON_OO(cudaGetLastError());
+
     kotekan::launch_direct_beamformer(d_packed, d_direct_weights, d_direct_voltages, n_time, n_freq, n_ant, 1, max_beams_stride, 256, 4, 4, stream);
-    cudaStreamSynchronize(stream);
+    CHECK_CUDA_ERROR_NON_OO(cudaGetLastError());
+    CHECK_CUDA_ERROR_NON_OO(cudaStreamSynchronize(stream));
 
     const std::size_t test_check_samples = std::min(n_time, static_cast<std::size_t>(512));
     const std::size_t check_count = test_check_samples * n_freq;
     std::vector<float2> h_v5_out(check_count);
     std::vector<float2> h_direct_out(check_count * max_beams_stride);
 
-    cudaMemcpy(h_v5_out.data(), d_v5_voltages, check_count * sizeof(float2), cudaMemcpyDeviceToHost);
-    cudaMemcpy(h_direct_out.data(), d_direct_voltages, check_count * max_beams_stride * sizeof(float2), cudaMemcpyDeviceToHost);
+    CHECK_CUDA_ERROR_NON_OO(cudaMemcpy(h_v5_out.data(), d_v5_voltages, check_count * sizeof(float2), cudaMemcpyDeviceToHost));
+    CHECK_CUDA_ERROR_NON_OO(cudaMemcpy(h_direct_out.data(), d_direct_voltages, check_count * max_beams_stride * sizeof(float2), cudaMemcpyDeviceToHost));
 
     float max_err = 0.0f;
     for (std::size_t i = 0; i < check_count; ++i) {
@@ -181,6 +187,11 @@ void run_comparison_benchmark(
         max_err = std::max(max_err, std::max(dr, di));
     }
     const bool parity_pass = (max_err < 1e-3f);
+    if (!parity_pass) {
+        std::cerr << " [PARITY FAIL: max_err=" << max_err
+                  << " V5[0]=(" << h_v5_out[0].x << "," << h_v5_out[0].y << ")"
+                  << " Dir[0]=(" << h_direct_out[0].x << "," << h_direct_out[0].y << ")] " << std::flush;
+    }
 
     // -------------------------------------------------------------------------
     // 2. Benchmark Beam Tracker V5 Baseline (Windowed)
@@ -191,7 +202,8 @@ void run_comparison_benchmark(
             kotekan::launch_beam_tracker_v5(d_packed, d_v5_voltages, n_time, n_freq, n_ant, h_frequencies, v5_config, stream);
         }
     }
-    cudaStreamSynchronize(stream);
+    CHECK_CUDA_ERROR_NON_OO(cudaGetLastError());
+    CHECK_CUDA_ERROR_NON_OO(cudaStreamSynchronize(stream));
 
     std::vector<float> v5_times;
     for (int iter = 0; iter < n_iterations; ++iter) {
@@ -200,7 +212,8 @@ void run_comparison_benchmark(
             kotekan::launch_beam_tracker_v5(d_packed, d_v5_voltages, n_time, n_freq, n_ant, h_frequencies, v5_config, stream);
         }
         cudaEventRecord(stop_evt, stream);
-        cudaEventSynchronize(stop_evt);
+        CHECK_CUDA_ERROR_NON_OO(cudaGetLastError());
+        CHECK_CUDA_ERROR_NON_OO(cudaEventSynchronize(stop_evt));
 
         float ms = 0.0f;
         cudaEventElapsedTime(&ms, start_evt, stop_evt);
@@ -223,7 +236,8 @@ void run_comparison_benchmark(
             d_packed, d_direct_weights, d_direct_voltages,
             n_time, n_freq, n_ant, n_beams, max_beams_stride, 256, 4, 4, stream);
     }
-    cudaStreamSynchronize(stream);
+    CHECK_CUDA_ERROR_NON_OO(cudaGetLastError());
+    CHECK_CUDA_ERROR_NON_OO(cudaStreamSynchronize(stream));
 
     std::vector<float> direct_times;
     for (int iter = 0; iter < n_iterations; ++iter) {
@@ -232,7 +246,8 @@ void run_comparison_benchmark(
             d_packed, d_direct_weights, d_direct_voltages,
             n_time, n_freq, n_ant, n_beams, max_beams_stride, 256, 4, 4, stream);
         cudaEventRecord(stop_evt, stream);
-        cudaEventSynchronize(stop_evt);
+        CHECK_CUDA_ERROR_NON_OO(cudaGetLastError());
+        CHECK_CUDA_ERROR_NON_OO(cudaEventSynchronize(stop_evt));
 
         float ms = 0.0f;
         cudaEventElapsedTime(&ms, start_evt, stop_evt);

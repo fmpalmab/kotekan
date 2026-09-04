@@ -171,7 +171,7 @@ __global__ void precompute_sky_grid_kernel(
 }
 
 template <int N_ANT, int B_TILE, int TIME_UNROLL>
-__global__ void __launch_bounds__(128, 2)
+__global__ void __launch_bounds__(128)
 direct_beamformer_fused_multibeam_kernel(
     float2* __restrict__ voltages,
     const float2* __restrict__ weights,
@@ -288,11 +288,14 @@ direct_beamformer_fused_multibeam_kernel(
             }
         }
 
-        // Coalesced write across lanes 0..B_TILE-1 to contiguous beam output slots
-        if (lane < B_TILE && lane < active_in_tile) {
+        // Write across beams: Lane 0 holds the warp-reduced sum for all B_TILE beams
+        if (lane == 0) {
             #pragma unroll
-            for (int k = 0; k < TIME_UNROLL; ++k) {
-                voltages_ptr[k * voltage_stride + lane] = make_float2(s_r[lane][k], s_i[lane][k]);
+            for (int b = 0; b < active_in_tile; ++b) {
+                #pragma unroll
+                for (int k = 0; k < TIME_UNROLL; ++k) {
+                    voltages_ptr[k * voltage_stride + b] = make_float2(s_r[b][k], s_i[b][k]);
+                }
             }
         }
 
@@ -325,8 +328,11 @@ direct_beamformer_fused_multibeam_kernel(
             }
         }
 
-        if (lane < B_TILE && lane < active_in_tile) {
-            voltages_ptr[lane] = make_float2(s_r[lane], s_i[lane]);
+        if (lane == 0) {
+            #pragma unroll
+            for (int b = 0; b < active_in_tile; ++b) {
+                voltages_ptr[b] = make_float2(s_r[b], s_i[b]);
+            }
         }
 
         packed_ptr += t_stride;
@@ -339,16 +345,27 @@ direct_beamformer_fused_multibeam_kernel(
 void set_l2_persisting_weights_policy(cudaStream_t stream, const void* ptr, std::size_t bytes) {
 #if CUDART_VERSION >= 11000
     if (ptr == nullptr || bytes == 0) return;
+    if (std::getenv("KOTEKAN_DISABLE_L2_POLICY") != nullptr) return;
 
     int dev_id = 0;
-    if (cudaGetDevice(&dev_id) != cudaSuccess) return;
+    if (cudaGetDevice(&dev_id) != cudaSuccess) {
+        cudaGetLastError();
+        return;
+    }
 
     cudaDeviceProp prop;
-    if (cudaGetDeviceProperties(&prop, dev_id) != cudaSuccess) return;
+    if (cudaGetDeviceProperties(&prop, dev_id) != cudaSuccess) {
+        cudaGetLastError();
+        return;
+    }
 
     if (prop.persistingL2CacheMaxSize > 0) {
-        const std::size_t window_size = std::min(bytes, static_cast<std::size_t>(prop.persistingL2CacheMaxSize));
-        cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, window_size);
+        const std::size_t aligned_bytes = (bytes + 127) & ~static_cast<std::size_t>(127);
+        const std::size_t window_size = std::min(aligned_bytes, static_cast<std::size_t>(prop.persistingL2CacheMaxSize));
+        if (cudaDeviceSetLimit(cudaLimitPersistingL2CacheSize, window_size) != cudaSuccess) {
+            cudaGetLastError();
+            return;
+        }
 
         cudaStreamAttrValue attr;
         std::memset(&attr, 0, sizeof(attr));
@@ -358,7 +375,9 @@ void set_l2_persisting_weights_policy(cudaStream_t stream, const void* ptr, std:
         attr.accessPolicyWindow.hitProp = cudaAccessPropertyPersisting;
         attr.accessPolicyWindow.missProp = cudaAccessPropertyStreaming;
 
-        cudaStreamSetAttribute(stream, cudaStreamAttributeAccessPolicyWindow, &attr);
+        if (cudaStreamSetAttribute(stream, cudaStreamAttributeAccessPolicyWindow, &attr) != cudaSuccess) {
+            cudaGetLastError();
+        }
     }
 #else
     (void)stream; (void)ptr; (void)bytes;
@@ -463,6 +482,8 @@ void launch_direct_beamformer(
         default:
             throw std::invalid_argument("Unsupported n_ant for Direct Beamformer: must be 32, 64, 128, or 256");
     }
+
+    CHECK_CUDA_ERROR_NON_OO(cudaGetLastError());
 }
 
 void launch_generate_steering_weights(

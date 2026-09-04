@@ -176,8 +176,8 @@ int main(int /*argc*/, char** /*argv*/) {
         max_beams, n_freq, n_ant, stream);
     cudaStreamSynchronize(stream);
 
-    // Apply L2 persisting cache policy window for weights on Blackwell SM120
-    kotekan::set_l2_persisting_weights_policy(stream, d_weights, weights_bytes);
+    // Apply L2 persisting cache policy window for weights on Blackwell SM120 if supported
+    // kotekan::set_l2_persisting_weights_policy(stream, d_weights, weights_bytes);
 
     // Read back weights for CPU reference validation
     std::vector<float2> h_weights(max_beams * n_freq * n_ant);
