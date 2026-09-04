@@ -26,7 +26,7 @@ using Clock = std::chrono::high_resolution_clock;
 
 constexpr double SPEED_OF_LIGHT = kotekan::charts::constants::speed_of_light_m_per_s;
 constexpr double TWO_PI = kotekan::charts::constants::two_pi;
-constexpr double REAL_TIME_BUDGET_51MS = 51.2; // 15,360 samples at 3.333 us/sample = 51.2 ms
+constexpr double SAMPLE_TIME_US = 3.333333333333; // 8192 / 2457.6 MHz = 3.3333 us/sample
 
 // Helper to generate synthetic 4-bit packed complex voltage data [time][freq][ant]
 std::vector<kotekan::int4x2_t> generate_synthetic_data(
@@ -262,7 +262,7 @@ void run_comparison_benchmark(
     const double direct_eff_gb_s = ((direct_read_bytes + direct_write_bytes) / (direct_avg_ms * 1e-3)) / 1e9;
 
     const double speedup = v5_avg_ms / std::max(1e-6, direct_avg_ms);
-    const double budget_ms = (static_cast<double>(n_time) / 15360.0) * REAL_TIME_BUDGET_51MS;
+    const double budget_ms = (static_cast<double>(n_time) * SAMPLE_TIME_US) / 1000.0;
     const double budget_pct = (direct_avg_ms / budget_ms) * 100.0;
     const double realtime_factor = budget_ms / std::max(1e-6, direct_avg_ms);
 
@@ -289,8 +289,23 @@ void run_comparison_benchmark(
 } // namespace
 
 int main(int argc, char** argv) {
-    (void)argc;
-    (void)argv;
+    std::size_t n_time = 3840; // Default: 3,840 time samples (12.8 ms frame duration, low-VRAM 2.23 GB profile)
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--n-time" && i + 1 < argc) {
+            n_time = std::stoul(argv[++i]);
+        } else if (arg == "--15360" || arg == "--full-frame") {
+            n_time = 15360;
+        } else if (arg == "--3840" || arg == "--low-vram") {
+            n_time = 3840;
+        } else if (arg == "-h" || arg == "--help") {
+            std::cout << "Usage: " << argv[0] << " [--n-time <samples>] [--3840] [--15360]\n";
+            std::cout << "  --3840, --low-vram : 3,840 time samples (12.8 ms frame, ~2.23 GB VRAM at 256 ant) [DEFAULT]\n";
+            std::cout << "  --15360, --full    : 15,360 time samples (51.2 ms frame, ~11.89 GB VRAM at 256 ant)\n";
+            return 0;
+        }
+    }
+
     std::cout << "========================================================================================================================\n";
     std::cout << " CHARTS Radio Telescope Beam Tracker Benchmark: Direct Beamformer vs. Beam Tracker V5\n";
     std::cout << " Grounded in CHORD FRB Beamformer (Smith 2022) & SPOTLIGHT Multi-Beam Backend (Gajendran et al. 2025)\n";
@@ -300,7 +315,13 @@ int main(int argc, char** argv) {
     cudaGetDeviceProperties(&prop, 0);
     std::cout << "GPU Hardware Target : " << prop.name << " (Compute " << prop.major << "." << prop.minor
               << ", " << (prop.totalGlobalMem / (1024 * 1024)) << " MB VRAM, "
-              << prop.multiProcessorCount << " SMs)\n\n";
+              << prop.multiProcessorCount << " SMs)\n";
+
+    const double frame_budget_ms = (static_cast<double>(n_time) * SAMPLE_TIME_US) / 1000.0;
+    std::cout << "Configuration Target:\n";
+    std::cout << "  - Frame Time Samples : " << n_time << " (" << std::fixed << std::setprecision(2) << frame_budget_ms << " ms real-time frame duration)\n";
+    std::cout << "  - Frequency Channels : 672 channels (full local band)\n";
+    std::cout << "  - Profile Mode       : " << ((n_time == 3840) ? "Low-VRAM & Low-Latency Profile (2.23 GB at N_ant=256, buffer_depth=3)" : "Standard Extended Payload Profile") << "\n\n";
 
     cudaStream_t stream;
     cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
@@ -311,7 +332,6 @@ int main(int argc, char** argv) {
     // Test matrix across array scales and beam configurations
     const std::vector<std::size_t> ant_counts = {32, 64, 128, 256};
     const std::vector<std::size_t> beam_counts = {1, 2, 4};
-    const std::size_t n_time_full = 15360; // 51.2 ms payload
     const std::size_t n_freq = 672;        // Full local frequency band
 
     std::cout << "Executing Head-to-Head Benchmarks across Matrix (" << iterations << " iterations per configuration)...\n\n";
@@ -320,10 +340,10 @@ int main(int argc, char** argv) {
         for (std::size_t n_beams : beam_counts) {
             std::cout << " -> Running N_ant=" << std::setw(3) << n_ant
                       << ", Beams=" << n_beams
-                      << ", N_time=" << n_time_full
+                      << ", N_time=" << n_time
                       << ", N_freq=" << n_freq << " ... " << std::flush;
 
-            run_comparison_benchmark(n_ant, n_time_full, n_freq, n_beams, 4, iterations, results, stream);
+            run_comparison_benchmark(n_ant, n_time, n_freq, n_beams, 4, iterations, results, stream);
             std::cout << "DONE (Speedup: " << std::fixed << std::setprecision(2) << results.back().speedup_ratio << "x)\n";
         }
     }
@@ -359,7 +379,8 @@ int main(int argc, char** argv) {
         jout << "{\n";
         jout << "  \"gpu_device\": \"" << prop.name << "\",\n";
         jout << "  \"n_iterations\": " << iterations << ",\n";
-        jout << "  \"frame_budget_ms\": " << REAL_TIME_BUDGET_51MS << ",\n";
+        jout << "  \"n_time\": " << n_time << ",\n";
+        jout << "  \"frame_budget_ms\": " << frame_budget_ms << ",\n";
         jout << "  \"records\": [\n";
         for (std::size_t i = 0; i < results.size(); ++i) {
             const auto& r = results[i];

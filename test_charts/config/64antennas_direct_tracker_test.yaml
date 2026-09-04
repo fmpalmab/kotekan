@@ -11,11 +11,11 @@ cpu_affinity: [0, 1, 2, 3]
 
 num_elements: 64
 num_local_freq: 336
-samples_per_data_set: 15360
+samples_per_data_set: 3840
 spacing_m: 0.6
 max_beams: 4
 initial_active_beams: 2
-buffer_depth: 4
+buffer_depth: 3
 sizeof_complex_float: 8
 
 main_pool:
@@ -66,11 +66,11 @@ gpu:
       gpu_mem_formed_beams: formed_beams
       num_elements: 64
       num_local_freq: 336
-      samples_per_data_set: 15360
+      samples_per_data_set: 3840
       spacing_m: 0.6
       max_beams: 4
       initial_active_beams: 2
-      buffer_depth: 4
+      buffer_depth: 3
       time_chunk_size: 256
       time_unroll: 4
       beam_tile_size: 4

@@ -88,17 +88,28 @@ void cpu_reference_direct_beamformer(
 
 } // namespace
 
-int main(int /*argc*/, char** /*argv*/) {
+int main(int argc, char** argv) {
+    std::size_t n_time = 3840;  // Default: 3,840 samples (~12.8 ms)
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--n-time" && i + 1 < argc) {
+            n_time = std::stoul(argv[++i]);
+        } else if (arg == "--15360" || arg == "--full") {
+            n_time = 15360;
+        } else if (arg == "--3840" || arg == "--low-vram") {
+            n_time = 3840;
+        }
+    }
+
     std::cout << "===================================================================================================\n";
     std::cout << " CHARTS Direct Beam Tracker (Zero Integration Window) Benchmark & Numerical Validation\n";
     std::cout << "===================================================================================================\n\n";
 
-    const std::size_t n_time = 15360;  // 15,360 samples (~51.2 ms)
     const std::size_t n_freq = 672;    // Full 672 CHARTS local channels
     const std::size_t n_ant = 32;      // 32 Antennas
     const std::size_t max_beams = 4;
     const std::size_t n_iterations = 25;
-    const double real_time_budget_ms = 51.2;
+    const double real_time_budget_ms = (static_cast<double>(n_time) * 3.333333333333) / 1000.0;
 
     const std::size_t input_bytes = n_time * n_freq * n_ant * sizeof(kotekan::int4x2_t);
     const std::size_t output_bytes = n_time * n_freq * max_beams * sizeof(float2);
@@ -109,7 +120,7 @@ int main(int /*argc*/, char** /*argv*/) {
     std::cout << "  - Frequency Channels (n_freq)        : " << n_freq << "\n";
     std::cout << "  - Antenna Elements (n_ant)           : " << n_ant << "\n";
     std::cout << "  - Max Beams (Allocated Stride)       : " << max_beams << "\n";
-    std::cout << "  - Real-Time Frame Duration (Budget)  : " << real_time_budget_ms << " ms\n";
+    std::cout << "  - Real-Time Frame Duration (Budget)  : " << std::fixed << std::setprecision(2) << real_time_budget_ms << " ms\n";
     std::cout << "  - Input Buffer Size                  : " << (input_bytes / (1024.0 * 1024.0)) << " MB\n";
     std::cout << "  - Output Buffer Size                 : " << (output_bytes / (1024.0 * 1024.0)) << " MB\n";
     std::cout << "  - Weights Buffer Size                : " << (weights_bytes / 1024.0) << " KB\n\n";
