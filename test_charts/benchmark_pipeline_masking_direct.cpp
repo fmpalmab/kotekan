@@ -33,8 +33,35 @@ struct FrameMetrics {
     int saturated_antennas = 0;
 };
 
-// Generate synthetic frame with controlled noise, calibrated astronomical point source,
-// and specific dead/saturated antenna fault injections.
+// Device kernel for ultra-fast (sub-microsecond) GPU fault injection during continuous chaos runs
+__global__ void inject_faults_kernel(
+    kotekan::int4x2_t* __restrict__ voltages,
+    const uint8_t* __restrict__ fault_types, // 0 = normal, 1 = dead (0), 2 = sat (rails +/-7, -8)
+    size_t total_spectra,
+    size_t n_ant,
+    unsigned int seed)
+{
+    size_t s = blockIdx.x * blockDim.x + threadIdx.x;
+    if (s >= total_spectra) return;
+
+    size_t base = s * n_ant;
+    uint8_t* raw = reinterpret_cast<uint8_t*>(voltages);
+
+    for (size_t a = 0; a < n_ant; ++a) {
+        uint8_t ft = fault_types[a];
+        if (ft == 1) {
+            raw[base + a] = 0;
+        } else if (ft == 2) {
+            uint32_t h = (seed + static_cast<unsigned int>(s) * 31U + static_cast<unsigned int>(a) * 104729U);
+            h = (h ^ (h >> 16U)) * 0x45d9f3bU;
+            int r = (h & 1U) ? 7 : -8;
+            int i = (h & 2U) ? 7 : -8;
+            raw[base + a] = static_cast<uint8_t>((r & 0x0FU) | ((i & 0x0FU) << 4U));
+        }
+    }
+}
+
+// Generate synthetic base frame on CPU with calibrated point source & nominal noise
 void generate_test_frame(
     std::vector<kotekan::int4x2_t>& data,
     std::size_t n_time,
@@ -62,17 +89,15 @@ void generate_test_frame(
 
             for (std::size_t a = 0; a < n_ant; ++a) {
                 if (is_dead[a]) {
-                    // DEAD: purely zero (cable pulled / missing packet)
                     data[s * n_ant + a].val = 0;
                 } else if (is_saturated[a]) {
-                    // SATURATED: severe ADC rail clipping (+7, -8) from intense terrestrial RFI
                     const int r = (uni(rng) < 0.5f) ? 7 : -8;
                     const int i = (uni(rng) < 0.5f) ? 7 : -8;
                     data[s * n_ant + a].val = static_cast<uint8_t>((r & 0x0F) | ((i & 0x0F) << 4));
                 } else {
-                    // HEALTHY: Gaussian background noise + coherent astronomical point source
                     const float3 pos = positions[a];
-                    const double geom_phase = k * (pos.x * source_l + pos.y * source_m);
+                    // Conjugate phase (-k * delay) ensures exact coherent addition when multiplied by steering weights (+k * delay)
+                    const double geom_phase = - k * (pos.x * source_l + pos.y * source_m);
                     const double sig_re = source_amplitude * std::cos(geom_phase);
                     const double sig_im = source_amplitude * std::sin(geom_phase);
 
@@ -201,15 +226,22 @@ int main(int argc, char** argv) {
         positions[a] = make_float3(col * spacing_m, row * spacing_m, 0.0f);
     }
 
-    // Beam targets (Beam 0 on target source, Beams 1-3 pointing elsewhere)
+    // Beam targets:
+    // Beam 0 steered at point source (l=0.15, m=-0.10)
+    // Beam 1 steered at Zenith (l=0.00, m=0.00) -> well outside array synthesized beamwidth (>1.7 FWHM)
+    const float src_l = 0.15f;
+    const float src_m = -0.10f;
+    const float src_n = std::sqrt(std::max(0.0f, 1.0f - src_l * src_l - src_m * src_m));
+
     std::vector<kotekan::DirectDirection3D> dirs(max_beams);
-    dirs[0] = {0.04f, -0.02f, 0.999f}; // Target point source
-    dirs[1] = {0.00f,  0.00f, 1.000f}; // Zenith
-    dirs[2] = {-0.05f, 0.03f, 0.998f};
-    dirs[3] = {0.08f,  0.05f, 0.995f};
+    dirs[0] = {src_l, src_m, src_n};
+    dirs[1] = {0.00f, 0.00f, 1.000f}; // Zenith
+    dirs[2] = {-0.08f, 0.08f, std::sqrt(1.0f - 0.08f*0.08f - 0.08f*0.08f)};
+    dirs[3] = {0.12f, 0.15f, std::sqrt(1.0f - 0.12f*0.12f - 0.15f*0.15f)};
 
     // Allocate GPU buffers
     kotekan::int4x2_t* d_voltages = nullptr;
+    kotekan::int4x2_t* d_voltages_base = nullptr;
     float2* d_formed_beams = nullptr;
     float2* d_weights = nullptr;
     kotekan::DirectDirection3D* d_dirs = nullptr;
@@ -219,8 +251,10 @@ int main(int argc, char** argv) {
     float* d_powers = nullptr;
     std::uint32_t* d_clips = nullptr;
     int* d_bad_antennas = nullptr;
+    uint8_t* d_fault_types = nullptr;
 
     cudaMalloc(&d_voltages, in_bytes);
+    cudaMalloc(&d_voltages_base, in_bytes);
     cudaMalloc(&d_formed_beams, out_bytes);
     cudaMalloc(&d_weights, weights_bytes);
     cudaMalloc(&d_dirs, max_beams * sizeof(kotekan::DirectDirection3D));
@@ -230,6 +264,7 @@ int main(int argc, char** argv) {
     cudaMalloc(&d_powers, n_ant * sizeof(float));
     cudaMalloc(&d_clips, n_ant * sizeof(std::uint32_t));
     cudaMalloc(&d_bad_antennas, n_ant * sizeof(int));
+    cudaMalloc(&d_fault_types, n_ant * sizeof(uint8_t));
 
     cudaMemcpy(d_dirs, dirs.data(), max_beams * sizeof(kotekan::DirectDirection3D), cudaMemcpyHostToDevice);
     cudaMemcpy(d_wavenumbers, wavenumbers.data(), n_freq * sizeof(double), cudaMemcpyHostToDevice);
@@ -264,8 +299,9 @@ int main(int argc, char** argv) {
     for (std::size_t a = 16; a < 32; ++a) is_sat[a] = true;
 
     generate_test_frame(h_frame, n_time, n_freq, n_ant, freqs_hz, positions,
-                        0.04f, -0.02f, 2.5f, is_dead, is_sat, rng);
+                        src_l, src_m, 2.5f, is_dead, is_sat, rng);
     cudaMemcpy(d_voltages, h_frame.data(), in_bytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_voltages_base, h_frame.data(), in_bytes, cudaMemcpyHostToDevice);
 
     std::vector<FrameMetrics> perf_records;
     perf_records.reserve(perf_frames);
@@ -353,7 +389,9 @@ int main(int argc, char** argv) {
     std::cout << " MODULE 2: Numerical Validation, Theoretical Coherent Gain & RFI Rejection\n";
     std::cout << "----------------------------------------------------------------------------------------------------\n";
 
-    // Ground truth comparison with CPU Reference
+    // Reset d_voltages from pristine base frame
+    cudaMemcpy(d_voltages, d_voltages_base, in_bytes, cudaMemcpyDeviceToDevice);
+
     std::vector<uint8_t> h_mask(n_ant, 1);
     for (std::size_t a = 0; a < 16; ++a) h_mask[a] = 0;      // 16 dead
     for (std::size_t a = 16; a < 32; ++a) h_mask[a] = 0;     // 16 saturated
@@ -363,7 +401,10 @@ int main(int argc, char** argv) {
     kotekan::launch_generate_steering_weights(d_weights, d_dirs, d_wavenumbers, d_positions, d_mask, nullptr,
                                              num_beams, n_freq, n_ant, stream);
 
-    // Re-blank input
+    // In-place zeroing of bad antennas
+    std::vector<int> bad_idx_32(32);
+    std::iota(bad_idx_32.begin(), bad_idx_32.end(), 0);
+    cudaMemcpy(d_bad_antennas, bad_idx_32.data(), 32 * sizeof(int), cudaMemcpyHostToDevice);
     kotekan::launch_zero_bad_antennas(d_voltages, d_bad_antennas, 32, total_spectra, n_ant, stream);
 
     // Execute direct beamformer
@@ -410,8 +451,7 @@ int main(int argc, char** argv) {
     std::cout << "  - Max Absolute Complex Difference         : " << std::scientific << max_abs_diff << "\n";
     std::cout << "  - Max Relative Complex Difference         : " << max_rel_diff << "\n";
 
-    // Verify coherent gain on Target Source Beam (Beam 0)
-    // Coherent addition over 224 healthy antennas should yield ~224x voltage gain
+    // Verify coherent gain on Target Source Beam (Beam 0) vs Off-Target (Beam 1)
     double beam0_power = 0.0;
     double beam1_power = 0.0;
     for (std::size_t s = 0; s < slice_time * n_freq; ++s) {
@@ -425,7 +465,7 @@ int main(int argc, char** argv) {
 
     double snr_ratio = beam0_power / (beam1_power > 0.0 ? beam1_power : 1.0);
     std::cout << "  - Formed Target Beam (Beam 0) Mean Power  : " << std::fixed << std::setprecision(2) << beam0_power << "\n";
-    std::cout << "  - Off-Target Off-Axis (Beam 1) Mean Power : " << beam1_power << "\n";
+    std::cout << "  - Off-Target Zenith  (Beam 1) Mean Power : " << beam1_power << "\n";
     std::cout << "  - Synthesized Beam Peak Contrast Ratio    : " << snr_ratio << " (" << 10.0 * std::log10(snr_ratio) << " dB)\n";
 
     bool mod2_passed = (max_abs_diff < 1e-3 && snr_ratio > 10.0);
@@ -450,24 +490,36 @@ int main(int argc, char** argv) {
     bool hysteresis_respected = false;
     int revival_frame_count = 0;
 
+    std::vector<uint8_t> h_fault_types(n_ant, 0);
+
     for (std::size_t frame = 0; frame < chaos_frames; ++frame) {
-        std::vector<bool> f_dead(n_ant, false);
-        std::vector<bool> f_sat(n_ant, false);
+        // Fast reset from GPU base buffer
+        cudaMemcpyAsync(d_voltages, d_voltages_base, in_bytes, cudaMemcpyDeviceToDevice, stream);
+
+        std::fill(h_fault_types.begin(), h_fault_types.end(), 0);
+        bool has_faults = false;
 
         if (frame >= 30 && frame < 70) {
-            // Frame 30..69: Catastrophic 32-antenna RFI burst
-            for (std::size_t a = 32; a < 64; ++a) f_sat[a] = true;
+            // Frame 30..69: Catastrophic 32-antenna RFI burst on antennas 32..63
+            for (std::size_t a = 32; a < 64; ++a) h_fault_types[a] = 2; // 2 = saturated
+            has_faults = true;
         } else if (frame >= 100 && frame < 150) {
-            // Frame 100..149: High-frequency flapping (antennas 100..110 die and recover alternately)
+            // Frame 100..149: High-frequency flapping (antennas 100..109 die and recover alternately)
             for (std::size_t a = 100; a < 110; ++a) {
-                if ((frame + a) % 3 == 0) f_dead[a] = true;
+                if ((frame + a) % 3 == 0) {
+                    h_fault_types[a] = 1; // 1 = dead
+                    has_faults = true;
+                }
             }
         }
 
-        // Generate dynamic frame
-        generate_test_frame(h_frame, n_time, n_freq, n_ant, freqs_hz, positions,
-                            0.04f, -0.02f, 2.5f, f_dead, f_sat, rng);
-        cudaMemcpyAsync(d_voltages, h_frame.data(), in_bytes, cudaMemcpyHostToDevice, stream);
+        if (has_faults) {
+            cudaMemcpyAsync(d_fault_types, h_fault_types.data(), n_ant * sizeof(uint8_t), cudaMemcpyHostToDevice, stream);
+            const unsigned int tpb = 256;
+            const unsigned int nb = static_cast<unsigned int>((total_spectra + tpb - 1) / tpb);
+            inject_faults_kernel<<<nb, tpb, 0, stream>>>(
+                d_voltages, d_fault_types, total_spectra, n_ant, static_cast<unsigned int>(frame * 137));
+        }
 
         // Step 1: GPU Inspection
         kotekan::launch_inspect_antenna_health(d_voltages, d_powers, d_clips, n_time, n_freq, n_ant, 1, stream);
@@ -539,11 +591,15 @@ int main(int argc, char** argv) {
                                           n_time, n_freq, n_ant, num_beams, max_beams, 256, 4, 4, stream);
         cudaStreamSynchronize(stream);
 
-        // Sanity check output
-        cudaMemcpy(h_gpu_out.data(), d_formed_beams, out_bytes, cudaMemcpyDeviceToHost);
+        // Sanity check output on first 1000 samples
+        cudaMemcpy(h_gpu_out.data(), d_formed_beams, 1000 * sizeof(float2), cudaMemcpyDeviceToHost);
         for (std::size_t s = 0; s < 1000; ++s) {
             if (std::isnan(h_gpu_out[s].x) || std::isnan(h_gpu_out[s].y)) chaos_nans++;
             if (std::isinf(h_gpu_out[s].x) || std::isinf(h_gpu_out[s].y)) chaos_infs++;
+        }
+
+        if ((frame + 1) % 40 == 0 || frame == chaos_frames - 1) {
+            std::cout << "  [Chaos Stream Progress] " << (frame + 1) << " / " << chaos_frames << " frames processed...\n";
         }
     }
 
@@ -591,6 +647,10 @@ int main(int argc, char** argv) {
         if (frame_ms > frame_budget_ms) {
             deadline_misses++;
         }
+
+        if ((f + 1) % 250 == 0 || f == stress_frames - 1) {
+            std::cout << "  [Stress Stream Progress] " << (f + 1) << " / " << stress_frames << " frames streamed...\n";
+        }
     }
 
     auto t_end_stress = Clock::now();
@@ -616,6 +676,7 @@ int main(int argc, char** argv) {
 
     // Clean up
     cudaFree(d_voltages);
+    cudaFree(d_voltages_base);
     cudaFree(d_formed_beams);
     cudaFree(d_weights);
     cudaFree(d_dirs);
@@ -625,6 +686,7 @@ int main(int argc, char** argv) {
     cudaFree(d_powers);
     cudaFree(d_clips);
     cudaFree(d_bad_antennas);
+    cudaFree(d_fault_types);
     cudaEventDestroy(ev_start);
     cudaEventDestroy(ev_inspect);
     cudaEventDestroy(ev_blank);
