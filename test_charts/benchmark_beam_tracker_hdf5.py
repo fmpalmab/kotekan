@@ -13,6 +13,8 @@ import time
 import argparse
 import numpy as np
 import h5py
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 _test_charts_dir = os.path.dirname(os.path.abspath(__file__))

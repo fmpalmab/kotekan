@@ -227,9 +227,9 @@ def run_bridge_verification(h5_path: str, out_plot: str = ""):
     # On-Target Beam
     v_on_target = beamform_synthesize(raw_data, freqs_hz, target_l, target_m, spacing_m=spacing_m, format_type=format_type)
 
-    # Off-Target (Near Sidelobe / Null)
-    offset_l = 0.12 if np.isscalar(target_l) else target_l + 0.10
-    offset_m = 0.08 if np.isscalar(target_m) else target_m + 0.08
+    # Off-Target (Sidelobe / Null Rejection outside 64-ant primary beamwidth ~0.2 rad)
+    offset_l = 0.25 if np.isscalar(target_l) else target_l + 0.25
+    offset_m = 0.20 if np.isscalar(target_m) else target_m + 0.20
     v_off_target = beamform_synthesize(raw_data, freqs_hz, offset_l, offset_m, spacing_m=spacing_m, format_type=format_type)
 
     t1_bf = time.perf_counter()

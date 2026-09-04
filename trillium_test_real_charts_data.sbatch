@@ -26,10 +26,23 @@ module load python/3.10 2>/dev/null || module load python || true
 module load scipy-stack 2>/dev/null || true
 module load hdf5 2>/dev/null || true
 
+# Setup high-speed scratch virtual environment inheriting CVMFS modules (numpy, scipy, matplotlib, h5py)
+VENV_DIR="${SLURM_TMPDIR:-/tmp}/kotekan_pyenv_${SLURM_JOB_ID:-manual}"
+if [ ! -d "${VENV_DIR}" ]; then
+    python3 -m venv --system-site-packages "${VENV_DIR}" || true
+fi
+if [ -f "${VENV_DIR}/bin/activate" ]; then
+    source "${VENV_DIR}/bin/activate"
+fi
+
+# Prevent matplotlib font-cache permission/lock issues on cluster compute nodes
+export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/matplotlib"
+mkdir -p "${MPLCONFIGDIR}"
+
 # Verify Python packages
 if ! python3 -c "import numpy, h5py, matplotlib" 2>/dev/null; then
     echo "Python scientific stack missing in module, installing locally..."
-    pip install --user --no-cache-dir numpy h5py matplotlib || true
+    pip install --no-index numpy h5py matplotlib || pip install numpy h5py matplotlib || true
 fi
 
 # 2. Paths & Environment
