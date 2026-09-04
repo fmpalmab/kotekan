@@ -152,4 +152,45 @@ void launch_zero_bad_antennas(
         d_voltages, d_bad_antennas, num_bad_antennas, total_spectra, n_ant);
 }
 
+__global__ void inject_faults_kernel(
+    int4x2_t* __restrict__ voltages,
+    const uint8_t* __restrict__ fault_types,
+    size_t total_spectra,
+    size_t n_ant,
+    unsigned int seed)
+{
+    size_t s = blockIdx.x * blockDim.x + threadIdx.x;
+    if (s >= total_spectra) return;
+
+    size_t base = s * n_ant;
+    uint8_t* raw = reinterpret_cast<uint8_t*>(voltages);
+
+    for (size_t a = 0; a < n_ant; ++a) {
+        uint8_t ft = fault_types[a];
+        if (ft == 1) {
+            raw[base + a] = 0;
+        } else if (ft == 2) {
+            uint32_t h = (seed + static_cast<unsigned int>(s) * 31U + static_cast<unsigned int>(a) * 104729U);
+            h = (h ^ (h >> 16U)) * 0x45d9f3bU;
+            int r = (h & 1U) ? 7 : -8;
+            int i = (h & 2U) ? 7 : -8;
+            raw[base + a] = static_cast<uint8_t>((r & 0x0FU) | ((i & 0x0FU) << 4U));
+        }
+    }
+}
+
+void launch_inject_faults(
+    int4x2_t* __restrict__ d_voltages,
+    const std::uint8_t* __restrict__ d_fault_types,
+    std::size_t total_spectra,
+    std::size_t n_ant,
+    unsigned int seed,
+    cudaStream_t stream)
+{
+    const unsigned int tpb = 256;
+    const unsigned int nb = static_cast<unsigned int>((total_spectra + tpb - 1) / tpb);
+    inject_faults_kernel<<<nb, tpb, 0, stream>>>(
+        d_voltages, d_fault_types, total_spectra, n_ant, seed);
+}
+
 } // namespace kotekan

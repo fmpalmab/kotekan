@@ -114,6 +114,18 @@ void launch_zero_bad_antennas(
     std::size_t n_ant,
     cudaStream_t stream);
 
+/**
+ * @brief Injects simulated antenna faults (dead=0, saturated=+/-7, -8) directly into
+ *        device voltage buffer in microseconds for testing & chaos engineering.
+ */
+void launch_inject_faults(
+    int4x2_t* __restrict__ d_voltages,
+    const std::uint8_t* __restrict__ d_fault_types,
+    std::size_t total_spectra,
+    std::size_t n_ant,
+    unsigned int seed,
+    cudaStream_t stream);
+
 } // namespace kotekan
 
 #endif // CUDA_ANTENNA_MASK_HPP

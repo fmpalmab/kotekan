@@ -33,34 +33,6 @@ struct FrameMetrics {
     int saturated_antennas = 0;
 };
 
-// Device kernel for ultra-fast (sub-microsecond) GPU fault injection during continuous chaos runs
-__global__ void inject_faults_kernel(
-    kotekan::int4x2_t* __restrict__ voltages,
-    const uint8_t* __restrict__ fault_types, // 0 = normal, 1 = dead (0), 2 = sat (rails +/-7, -8)
-    size_t total_spectra,
-    size_t n_ant,
-    unsigned int seed)
-{
-    size_t s = blockIdx.x * blockDim.x + threadIdx.x;
-    if (s >= total_spectra) return;
-
-    size_t base = s * n_ant;
-    uint8_t* raw = reinterpret_cast<uint8_t*>(voltages);
-
-    for (size_t a = 0; a < n_ant; ++a) {
-        uint8_t ft = fault_types[a];
-        if (ft == 1) {
-            raw[base + a] = 0;
-        } else if (ft == 2) {
-            uint32_t h = (seed + static_cast<unsigned int>(s) * 31U + static_cast<unsigned int>(a) * 104729U);
-            h = (h ^ (h >> 16U)) * 0x45d9f3bU;
-            int r = (h & 1U) ? 7 : -8;
-            int i = (h & 2U) ? 7 : -8;
-            raw[base + a] = static_cast<uint8_t>((r & 0x0FU) | ((i & 0x0FU) << 4U));
-        }
-    }
-}
-
 // Generate synthetic base frame on CPU with calibrated point source & nominal noise
 void generate_test_frame(
     std::vector<kotekan::int4x2_t>& data,
@@ -515,10 +487,8 @@ int main(int argc, char** argv) {
 
         if (has_faults) {
             cudaMemcpyAsync(d_fault_types, h_fault_types.data(), n_ant * sizeof(uint8_t), cudaMemcpyHostToDevice, stream);
-            const unsigned int tpb = 256;
-            const unsigned int nb = static_cast<unsigned int>((total_spectra + tpb - 1) / tpb);
-            inject_faults_kernel<<<nb, tpb, 0, stream>>>(
-                d_voltages, d_fault_types, total_spectra, n_ant, static_cast<unsigned int>(frame * 137));
+            kotekan::launch_inject_faults(
+                d_voltages, d_fault_types, total_spectra, n_ant, static_cast<unsigned int>(frame * 137), stream);
         }
 
         // Step 1: GPU Inspection
