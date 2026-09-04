@@ -61,6 +61,18 @@ gpu:
       in_buf: host_voltage
       gpu_mem: voltage
     - name: cudaSyncInput
+    - name: cudaAntennaMaskCommand
+      gpu_mem_voltage: voltage
+      num_elements: 64
+      num_local_freq: 336
+      samples_per_data_set: 3840
+      buffer_depth: 3
+      auto_detect_enabled: true
+      blank_voltages_enabled: true
+      dead_power_threshold: 0.05
+      sat_power_threshold: 80.0
+      clip_fraction_threshold: 0.02
+      revival_frames: 5
     - name: cudaDirectBeamTrackerCommand
       gpu_mem_voltage: voltage
       gpu_mem_formed_beams: formed_beams

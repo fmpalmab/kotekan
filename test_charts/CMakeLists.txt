@@ -4,6 +4,7 @@ if(CUDAToolkit_FOUND)
     set(COMMON_TEST_SRCS
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib/cuda/cudaBeamTrackerV5.cu
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib/cuda/cudaDirectBeamTracker.cu
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/cuda/cudaAntennaMask.cu
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib/core/kotekanLogging.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib/core/errors.c)
 
@@ -61,4 +62,11 @@ if(CUDAToolkit_FOUND)
         ${COMMON_TEST_SRCS})
     target_link_libraries(benchmark_tracker_v5_vs_direct PRIVATE CUDA::cudart Threads::Threads)
     target_include_directories(benchmark_tracker_v5_vs_direct PRIVATE ${COMMON_INCLUDE_DIRS})
+
+    # 7. Dead & Saturated Antenna Masking Stage Test Suite
+    add_executable(test_antenna_masking_stage
+        test_antenna_masking_stage.cpp
+        ${COMMON_TEST_SRCS})
+    target_link_libraries(test_antenna_masking_stage PRIVATE CUDA::cudart Threads::Threads)
+    target_include_directories(test_antenna_masking_stage PRIVATE ${COMMON_INCLUDE_DIRS})
 endif()

@@ -31,6 +31,9 @@ public:
     cudaEvent_t execute(cudaPipelineState& pipestate,
                         const std::vector<cudaEvent_t>& pre_events) override;
 
+    static void set_shared_antenna_mask(const std::array<std::uint8_t, MAX_DIRECT_ANTENNAS>& mask);
+    static std::array<std::uint8_t, MAX_DIRECT_ANTENNAS> get_shared_antenna_mask();
+
 private:
     void allocate_device_buffers();
     void free_device_buffers();

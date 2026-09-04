@@ -27,6 +27,19 @@ DirectBeamTrackerConfig cudaDirectBeamTrackerCommand::_shared_config;
 bool cudaDirectBeamTrackerCommand::_endpoints_registered = false;
 bool cudaDirectBeamTrackerCommand::_weights_dirty = true;
 
+void cudaDirectBeamTrackerCommand::set_shared_antenna_mask(const std::array<std::uint8_t, MAX_DIRECT_ANTENNAS>& mask) {
+    std::lock_guard<std::mutex> lock(_global_mutex);
+    if (_shared_config.antenna_mask != mask) {
+        _shared_config.antenna_mask = mask;
+        _weights_dirty = true;
+    }
+}
+
+std::array<std::uint8_t, MAX_DIRECT_ANTENNAS> cudaDirectBeamTrackerCommand::get_shared_antenna_mask() {
+    std::lock_guard<std::mutex> lock(_global_mutex);
+    return _shared_config.antenna_mask;
+}
+
 cudaDirectBeamTrackerCommand::cudaDirectBeamTrackerCommand(
     Config& config, const std::string& unique_name,
     bufferContainer& host_buffers, cudaDeviceInterface& device, int inst)
