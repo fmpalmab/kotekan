@@ -410,8 +410,8 @@ void launch_direct_beamformer(
     const std::size_t num_beam_tiles = (active_beams + b_tile - 1) / b_tile;
     const std::size_t total_warps = num_chunks * n_freq * num_beam_tiles;
 
-    // 256 threads per block (8 warps) for Blackwell SM sub-core latency hiding
-    constexpr int WARPS_PER_BLOCK = 8;
+    // 128 threads per block (4 warps) matching __launch_bounds__(128, 2)
+    constexpr int WARPS_PER_BLOCK = 4;
     const dim3 block_dim(32, WARPS_PER_BLOCK);
     const unsigned int grid_dim =
         static_cast<unsigned int>((total_warps + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK);
