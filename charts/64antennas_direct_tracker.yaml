@@ -184,8 +184,6 @@ gpu:
       sat_power_threshold: 80.0
       clip_fraction_threshold: 0.15
       revival_frames: 5
-      # Carén Observatory 8-antenna setup: working elements are raw elements 56..63
-      active_raw_elements: [56, 57, 58, 59, 60, 61, 62, 63]
 
     # Direct Fused Multi-Beam Tracker Kernel
     - name: cudaDirectBeamTrackerCommand
@@ -211,7 +209,6 @@ gpu:
       # Frequency band for Stream 0
       freq_start_hz: 300000000.0   # 300.0 MHz base
       freq_step_hz: 300000.0       # 300 kHz channel spacing
-      active_raw_elements: [56, 57, 58, 59, 60, 61, 62, 63]
       # Initial pointing: Zenith (steerable live via REST API /direct_tracker/set_target)
       source_l0: 0.0
       source_m0: 0.0
@@ -245,8 +242,6 @@ gpu:
       sat_power_threshold: 80.0
       clip_fraction_threshold: 0.15
       revival_frames: 5
-      # Carén Observatory 8-antenna setup: working elements are raw elements 56..63
-      active_raw_elements: [56, 57, 58, 59, 60, 61, 62, 63]
 
     # Direct Fused Multi-Beam Tracker Kernel
     - name: cudaDirectBeamTrackerCommand
@@ -272,7 +267,6 @@ gpu:
       # Frequency band for Stream 1 (starts at 300 MHz + 336 * 300 kHz = 400.8 MHz)
       freq_start_hz: 400800000.0   # 400.8 MHz base
       freq_step_hz: 300000.0
-      active_raw_elements: [56, 57, 58, 59, 60, 61, 62, 63]
       source_l0: 0.0
       source_m0: 0.0
       source_l0_1: 0.0

@@ -47,9 +47,9 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
         std::lock_guard<std::mutex> lock(_global_mutex);
         _shared_config.auto_detect_enabled = config.get_default<bool>(unique_name, "auto_detect_enabled", true);
         _shared_config.blank_voltages_enabled = config.get_default<bool>(unique_name, "blank_voltages_enabled", true);
-        _shared_config.dead_power_threshold = config.get_default<float>(unique_name, "dead_power_threshold", 0.05f);
+        _shared_config.dead_power_threshold = config.get_default<float>(unique_name, "dead_power_threshold", 0.50f);
         _shared_config.sat_power_threshold = config.get_default<float>(unique_name, "sat_power_threshold", 80.0f);
-        _shared_config.clip_fraction_threshold = config.get_default<float>(unique_name, "clip_fraction_threshold", 0.02f);
+        _shared_config.clip_fraction_threshold = config.get_default<float>(unique_name, "clip_fraction_threshold", 0.15f);
         _shared_config.revival_frames = static_cast<std::uint16_t>(config.get_default<int>(unique_name, "revival_frames", 5));
         _shared_config.sample_stride = static_cast<std::size_t>(config.get_default<int>(unique_name, "sample_stride", 1));
 

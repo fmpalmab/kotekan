@@ -55,9 +55,9 @@ struct AntennaHealthMetrics {
 struct AntennaMaskConfig {
     bool auto_detect_enabled = true;
     bool blank_voltages_enabled = true;   ///< Level 1: In-place zeroing of bad antennas in GPU memory
-    float dead_power_threshold = 0.05f;   ///< Mean power <= this value classified as DEAD (nominal ~4-10)
+    float dead_power_threshold = 0.50f;   ///< Mean power <= this value classified as DEAD (open ADC noise floor ~0.25)
     float sat_power_threshold = 80.0f;    ///< Mean power >= this value classified as SATURATED
-    float clip_fraction_threshold = 0.02f;///< Clipping fraction >= this value classified as SATURATED (2%)
+    float clip_fraction_threshold = 0.15f;///< Clipping fraction >= this value classified as SATURATED (15%)
     std::uint16_t revival_frames = 5;     ///< Required consecutive healthy frames to revive a masked antenna
     std::size_t sample_stride = 1;        ///< Stride over spectra (1 = inspect 100% of data, 4 = inspect 25%)
 
