@@ -135,7 +135,7 @@ protected:
     cudaDeviceInterface& device;
 
     /// The ID of the cuda stream to run operations on
-    int32_t cuda_stream_id;
+    int32_t cuda_stream_id = 0;
 
     // cudaPipelineState flag required for this command to run, set from config "required_flag"
     std::string _required_flag;

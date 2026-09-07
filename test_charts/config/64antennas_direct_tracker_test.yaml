@@ -68,10 +68,10 @@ gpu:
       samples_per_data_set: 3840
       buffer_depth: 3
       auto_detect_enabled: true
-      blank_voltages_enabled: true
-      dead_power_threshold: 0.05
+      blank_voltages_enabled: false
+      dead_power_threshold: 0.50
       sat_power_threshold: 80.0
-      clip_fraction_threshold: 0.02
+      clip_fraction_threshold: 0.15
       revival_frames: 5
     - name: cudaDirectBeamTrackerCommand
       gpu_mem_voltage: voltage
@@ -86,7 +86,7 @@ gpu:
       time_chunk_size: 256
       time_unroll: 4
       beam_tile_size: 4
-      enable_cuda_graph: true
+      enable_cuda_graph: false
       enable_grid_mode: false
       site_lat_deg: -33.4211146
       site_lon_deg: -70.8634710

@@ -55,7 +55,7 @@ cudaCommand::cudaCommand(Config& config_, const std::string& unique_name_,
                          const std::string& default_kernel_file_name) :
     gpuCommand(config_, unique_name_, host_buffers_, device_, instance_num_, state_,
                default_kernel_command, default_kernel_file_name),
-    start_event(nullptr), end_event(nullptr), device(device_) {
+    start_event(nullptr), end_event(nullptr), device(device_), cuda_stream_id(0) {
     _required_flag = config.get_default<std::string>(unique_name, "required_flag", "");
 }
 

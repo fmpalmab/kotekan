@@ -178,7 +178,7 @@ gpu:
       samples_per_data_set: 15360
       buffer_depth: 3
       auto_detect_enabled: true
-      blank_voltages_enabled: true
+      blank_voltages_enabled: false # Steering weights masking in cudaDirectBeamTracker already zeroes bad antennas
       # Unconnected ADC inputs float at power ~0.20-0.35. Threshold 0.50 marks open channels DEAD.
       dead_power_threshold: 0.50
       sat_power_threshold: 80.0
@@ -199,7 +199,7 @@ gpu:
       time_chunk_size: 256
       time_unroll: 4
       beam_tile_size: 4            # Fuses 4 beams in warp registers; cuts VRAM bandwidth by 4x
-      enable_cuda_graph: true      # Zero host dispatch latency
+      enable_cuda_graph: false     # Direct launch takes <3 us; graphs unnecessary and unsafe in multi-threaded stages
       enable_grid_mode: false
       grid_step: 0.02
       # Carén Observatory Site Coordinates
@@ -236,7 +236,7 @@ gpu:
       samples_per_data_set: 15360
       buffer_depth: 3
       auto_detect_enabled: true
-      blank_voltages_enabled: true
+      blank_voltages_enabled: false # Steering weights masking in cudaDirectBeamTracker already zeroes bad antennas
       # Unconnected ADC inputs float at power ~0.20-0.35. Threshold 0.50 marks open channels DEAD.
       dead_power_threshold: 0.50
       sat_power_threshold: 80.0
@@ -257,7 +257,7 @@ gpu:
       time_chunk_size: 256
       time_unroll: 4
       beam_tile_size: 4
-      enable_cuda_graph: true
+      enable_cuda_graph: false
       enable_grid_mode: false
       grid_step: 0.02
       # Carén Observatory Site Coordinates

@@ -148,6 +148,11 @@ void launch_zero_bad_antennas(
 {
     if (num_bad_antennas <= 0) return;
 
+    if (static_cast<std::size_t>(num_bad_antennas) >= n_ant) {
+        cudaMemsetAsync(d_voltages, 0, total_spectra * n_ant * sizeof(uint8_t), stream);
+        return;
+    }
+
     const unsigned int threads_per_block = 256;
     const unsigned int num_blocks = static_cast<unsigned int>((total_spectra + threads_per_block - 1) / threads_per_block);
 

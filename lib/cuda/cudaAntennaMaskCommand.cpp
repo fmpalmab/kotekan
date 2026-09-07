@@ -97,12 +97,13 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
             auto& rest = restServer::instance();
 
             // 1. GET /antenna_mask/status
-            auto status_cb = [this](connectionInstance& conn) {
+            int num_elements = _num_elements;
+            auto status_cb = [num_elements](connectionInstance& conn) {
                 nlohmann::json reply;
                 std::lock_guard<std::mutex> lk(_global_mutex);
 
                 reply["version"] = "Kotekan Antenna Masking Stage v1.0";
-                reply["num_elements"] = _num_elements;
+                reply["num_elements"] = num_elements;
                 reply["auto_detect_enabled"] = _shared_config.auto_detect_enabled;
                 reply["blank_voltages_enabled"] = _shared_config.blank_voltages_enabled;
                 reply["thresholds"] = {
@@ -119,7 +120,7 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
                 int manual_count = 0;
                 nlohmann::json ant_array = nlohmann::json::array();
 
-                for (int a = 0; a < _num_elements; ++a) {
+                for (int a = 0; a < num_elements; ++a) {
                     const auto& m = _shared_metrics[a];
                     const bool active = (_shared_mask[a] != 0);
                     if (active) active_count++;
@@ -139,7 +140,7 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
                 }
 
                 reply["active_antennas"] = active_count;
-                reply["masked_antennas"] = _num_elements - active_count;
+                reply["masked_antennas"] = num_elements - active_count;
                 reply["dead_antennas"] = dead_count;
                 reply["saturated_antennas"] = sat_count;
                 reply["manual_masked_antennas"] = manual_count;
@@ -204,7 +205,7 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
             rest.register_post_callback("/antenna_mask/unmask", unmask_cb);
 
             // 4. POST /antenna_mask/reset
-            auto reset_cb = [this](connectionInstance& conn, nlohmann::json& /*j*/) {
+            auto reset_cb = [](connectionInstance& conn, nlohmann::json& /*j*/) {
                 std::lock_guard<std::mutex> lk(_global_mutex);
                 _shared_config.manual_mask.fill(1);
                 _shared_mask.fill(1);
@@ -240,6 +241,10 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
             _endpoints_registered = true;
         }
     }
+
+    set_command_type(gpuCommandType::KERNEL);
+    set_name("cudaAntennaMaskCommand");
+    gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_voltage, true, true, true));
 
     allocate_device_buffers();
     INFO_NON_OO("Kotekan Antenna Masking Stage initialized for {:d} elements ({:s})",

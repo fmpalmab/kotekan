@@ -509,6 +509,9 @@ cudaEvent_t cudaDirectBeamTrackerCommand::execute(
                                      sizeof(float2);
     void* output_memory = device.get_gpu_memory_array(_gpu_mem_formed_beams, gpu_frame_id,
                                                       _gpu_buffer_depth, output_bytes);
+    if (!input_memory || !output_memory) {
+        return record_end_event();
+    }
 
     std::shared_ptr<metadataObject> meta = device.get_gpu_memory_array_metadata(_gpu_mem_voltage, gpu_frame_id);
     if (meta) {
@@ -544,7 +547,7 @@ cudaEvent_t cudaDirectBeamTrackerCommand::execute(
                 cudaGraphDestroy(_cuda_graphs[slot]);
                 _cuda_graphs[slot] = nullptr;
             }
-            CHECK_CUDA_ERROR_NON_OO(cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal));
+            CHECK_CUDA_ERROR_NON_OO(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal));
             launch_direct_beamformer(
                 reinterpret_cast<const int4x2_t*>(input_memory),
                 _d_weights,
