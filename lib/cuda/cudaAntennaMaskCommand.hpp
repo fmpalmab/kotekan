@@ -49,17 +49,21 @@ private:
     int32_t _buffer_depth = 3;
 
     std::string _gpu_mem_voltage;
+    std::string _gpu_mem_alive_voltages;
+    int32_t _max_alive_antennas = 7;
 
     // Device allocations
     float* _d_antenna_powers = nullptr;
     std::uint32_t* _d_antenna_clips = nullptr;
     int* _d_bad_antennas = nullptr;
+    int* _d_alive_antennas = nullptr;
 
     // Pinned host memory for low-latency telemetry copy
     float* _h_antenna_powers = nullptr;
     std::uint32_t* _h_antenna_clips = nullptr;
 
     std::vector<int> _current_bad_indices;
+    std::vector<int> _current_alive_indices;
 
     // Thread-safe shared configuration and metrics state
     static std::mutex _global_mutex;

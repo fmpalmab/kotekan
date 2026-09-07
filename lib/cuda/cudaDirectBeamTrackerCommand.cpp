@@ -5,6 +5,7 @@
 #include "kotekanLogging.hpp"
 #include "restServer.hpp"
 
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <stdexcept>
@@ -101,12 +102,24 @@ cudaDirectBeamTrackerCommand::cudaDirectBeamTrackerCommand(
             if (config.exists(unique_name, ra_key) && config.exists(unique_name, dec_key)) {
                 const double ra_deg = config.get<double>(unique_name, ra_key);
                 const double dec_deg = config.get<double>(unique_name, dec_key);
-                const double lst_hours = config.get_default<double>(unique_name, lst_key, 0.0);
+                double lst_hours = config.get_default<double>(unique_name, lst_key, -1.0);
+                if (lst_hours < 0.0) {
+                    using namespace std::chrono;
+                    double unix_s = duration_cast<duration<double>>(system_clock::now().time_since_epoch()).count();
+                    const double d = unix_s / 86400.0 - 10957.5;
+                    double gmst_hours = std::fmod(18.697374558 + 24.06570982441908 * d, 24.0);
+                    if (gmst_hours < 0.0) gmst_hours += 24.0;
+                    lst_hours = std::fmod(gmst_hours + site_lon_deg / 15.0, 24.0);
+                    if (lst_hours < 0.0) lst_hours += 24.0;
+                }
                 compute_celestial_direction(ra_deg, dec_deg, lst_hours, site_lat_deg, _shared_config.targets[b].direction);
                 _shared_config.targets[b].celestial.ra_deg = ra_deg;
                 _shared_config.targets[b].celestial.dec_deg = dec_deg;
                 _shared_config.targets[b].celestial.is_set = true;
-                INFO_NON_OO("Direct Beam Tracker: Initialized beam {:d} celestial target RA={:.4f}°, Dec={:.4f}°", b, ra_deg, dec_deg);
+                INFO_NON_OO("Direct Beam Tracker: Initialized beam {:d} celestial target RA={:.4f}°, Dec={:.4f}°, LST={:.4f}h -> (l0={:.5f}, m0={:.5f})",
+                            b, ra_deg, dec_deg, lst_hours,
+                            _shared_config.targets[b].direction.x,
+                            _shared_config.targets[b].direction.y);
             }
         }
 
@@ -213,10 +226,17 @@ cudaDirectBeamTrackerCommand::cudaDirectBeamTrackerCommand(
 
                     const double ra_deg = j["ra_deg"];
                     const double dec_deg = j["dec_deg"];
-                    double lst_hours = j.value("lst_hours", 0.0);
-
-                    if (!j.contains("lst_hours") && j.contains("unix_timestamp_s")) {
-                        const double unix_s = j["unix_timestamp_s"];
+                    double lst_hours = 0.0;
+                    if (j.contains("lst_hours")) {
+                        lst_hours = j["lst_hours"];
+                    } else {
+                        double unix_s = 0.0;
+                        if (j.contains("unix_timestamp_s")) {
+                            unix_s = j["unix_timestamp_s"];
+                        } else {
+                            using namespace std::chrono;
+                            unix_s = duration_cast<duration<double>>(system_clock::now().time_since_epoch()).count();
+                        }
                         const double d = unix_s / 86400.0 - 10957.5;
                         double gmst = std::fmod(18.697374558 + 24.06570982441908 * d, 24.0);
                         if (gmst < 0.0) gmst += 24.0;
@@ -297,6 +317,16 @@ cudaDirectBeamTrackerCommand::cudaDirectBeamTrackerCommand(
                 reply["samples_per_data_set"] = _samples_per_data_set;
                 reply["grid_mode_enabled"] = _grid_mode_enabled;
                 reply["grid_points"] = _num_grid_points;
+
+                using namespace std::chrono;
+                double unix_s = duration_cast<duration<double>>(system_clock::now().time_since_epoch()).count();
+                const double d = unix_s / 86400.0 - 10957.5;
+                double gmst = std::fmod(18.697374558 + 24.06570982441908 * d, 24.0);
+                if (gmst < 0.0) gmst += 24.0;
+                double cur_lst = std::fmod(gmst + _shared_config.site.lon_deg / 15.0, 24.0);
+                if (cur_lst < 0.0) cur_lst += 24.0;
+                reply["current_utc_timestamp"] = unix_s;
+                reply["current_lst_hours"] = cur_lst;
 
                 int active_count = 0;
                 nlohmann::json active_raw = nlohmann::json::array();
@@ -435,6 +465,37 @@ void cudaDirectBeamTrackerCommand::free_device_buffers() {
 }
 
 void cudaDirectBeamTrackerCommand::update_weights_if_needed(cudaStream_t stream) {
+    // Dynamic real-time celestial tracking: compute topocentric pointing from UTC time
+    {
+        using namespace std::chrono;
+        double unix_s = duration_cast<duration<double>>(system_clock::now().time_since_epoch()).count();
+        const double d = unix_s / 86400.0 - 10957.5;
+        double gmst = std::fmod(18.697374558 + 24.06570982441908 * d, 24.0);
+        if (gmst < 0.0) gmst += 24.0;
+
+        std::lock_guard<std::mutex> lk(_global_mutex);
+        double lst_hours = std::fmod(gmst + _shared_config.site.lon_deg / 15.0, 24.0);
+        if (lst_hours < 0.0) lst_hours += 24.0;
+
+        for (std::size_t b = 0; b < _shared_config.num_active_beams; ++b) {
+            if (_shared_config.targets[b].celestial.is_set) {
+                DirectDirection3D new_dir;
+                compute_celestial_direction(
+                    _shared_config.targets[b].celestial.ra_deg,
+                    _shared_config.targets[b].celestial.dec_deg,
+                    lst_hours,
+                    _shared_config.site.lat_deg,
+                    new_dir);
+
+                if (std::abs(new_dir.x - _shared_config.targets[b].direction.x) > 1.0e-6f ||
+                    std::abs(new_dir.y - _shared_config.targets[b].direction.y) > 1.0e-6f) {
+                    _shared_config.targets[b].direction = new_dir;
+                    _weights_dirty = true;
+                }
+            }
+        }
+    }
+
     if (!_weights_dirty) return;
 
     DirectBeamTrackerConfig cfg;

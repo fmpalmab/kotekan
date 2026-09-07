@@ -160,6 +160,49 @@ void launch_zero_bad_antennas(
         d_voltages, d_bad_antennas, num_bad_antennas, total_spectra, n_ant);
 }
 
+__global__ void extract_alive_antennas_kernel(
+    const int4x2_t* __restrict__ voltages,
+    int4x2_t* __restrict__ alive_voltages,
+    const int* __restrict__ alive_antennas,
+    int num_to_extract,
+    int max_alive_antennas,
+    size_t total_spectra,
+    size_t n_ant)
+{
+    size_t s = blockIdx.x * blockDim.x + threadIdx.x;
+    if (s >= total_spectra) return;
+
+    const uint8_t* in_bytes = reinterpret_cast<const uint8_t*>(voltages) + s * n_ant;
+    uint8_t* out_bytes = reinterpret_cast<uint8_t*>(alive_voltages) + s * max_alive_antennas;
+
+    for (int i = 0; i < num_to_extract; ++i) {
+        int ant = alive_antennas[i];
+        out_bytes[i] = in_bytes[ant];
+    }
+    for (int i = num_to_extract; i < max_alive_antennas; ++i) {
+        out_bytes[i] = 0;
+    }
+}
+
+void launch_extract_alive_antennas(
+    const int4x2_t* __restrict__ d_voltages,
+    int4x2_t* __restrict__ d_alive_voltages,
+    const int* __restrict__ d_alive_antennas,
+    int num_to_extract,
+    int max_alive_antennas,
+    std::size_t total_spectra,
+    std::size_t n_ant,
+    cudaStream_t stream)
+{
+    if (max_alive_antennas <= 0 || total_spectra == 0) return;
+
+    const unsigned int threads_per_block = 256;
+    const unsigned int num_blocks = static_cast<unsigned int>((total_spectra + threads_per_block - 1) / threads_per_block);
+
+    extract_alive_antennas_kernel<<<num_blocks, threads_per_block, 0, stream>>>(
+        d_voltages, d_alive_voltages, d_alive_antennas, num_to_extract, max_alive_antennas, total_spectra, n_ant);
+}
+
 __global__ void inject_faults_kernel(
     int4x2_t* __restrict__ voltages,
     const uint8_t* __restrict__ fault_types,

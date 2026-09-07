@@ -42,12 +42,14 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
     _buffer_depth = config.get<int>(unique_name, "buffer_depth");
 
     _gpu_mem_voltage = config.get_default<std::string>(unique_name, "gpu_mem_voltage", "voltage");
+    _gpu_mem_alive_voltages = config.get_default<std::string>(unique_name, "gpu_mem_alive_voltages", "");
+    _max_alive_antennas = config.get_default<int>(unique_name, "max_alive_antennas", 7);
 
     {
         std::lock_guard<std::mutex> lock(_global_mutex);
         _shared_config.auto_detect_enabled = config.get_default<bool>(unique_name, "auto_detect_enabled", true);
-        _shared_config.blank_voltages_enabled = config.get_default<bool>(unique_name, "blank_voltages_enabled", true);
-        _shared_config.dead_power_threshold = config.get_default<float>(unique_name, "dead_power_threshold", 0.50f);
+        _shared_config.blank_voltages_enabled = config.get_default<bool>(unique_name, "blank_voltages_enabled", false);
+        _shared_config.dead_power_threshold = config.get_default<float>(unique_name, "dead_power_threshold", 5.0f);
         _shared_config.sat_power_threshold = config.get_default<float>(unique_name, "sat_power_threshold", 80.0f);
         _shared_config.clip_fraction_threshold = config.get_default<float>(unique_name, "clip_fraction_threshold", 0.15f);
         _shared_config.revival_frames = static_cast<std::uint16_t>(config.get_default<int>(unique_name, "revival_frames", 5));
@@ -144,6 +146,14 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
                 reply["dead_antennas"] = dead_count;
                 reply["saturated_antennas"] = sat_count;
                 reply["manual_masked_antennas"] = manual_count;
+
+                nlohmann::json active_indices = nlohmann::json::array();
+                for (int a = 0; a < num_elements; ++a) {
+                    if (_shared_mask[a] != 0) {
+                        active_indices.push_back(a);
+                    }
+                }
+                reply["active_raw_elements"] = active_indices;
                 reply["antennas"] = ant_array;
 
                 conn.send_json_reply(reply);
@@ -245,6 +255,9 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
     set_command_type(gpuCommandType::KERNEL);
     set_name("cudaAntennaMaskCommand");
     gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_voltage, true, true, true));
+    if (!_gpu_mem_alive_voltages.empty()) {
+        gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_alive_voltages, true, false, true));
+    }
 
     allocate_device_buffers();
     INFO_NON_OO("Kotekan Antenna Masking Stage initialized for {:d} elements ({:s})",
@@ -260,6 +273,7 @@ void cudaAntennaMaskCommand::allocate_device_buffers() {
     CHECK_CUDA_ERROR_NON_OO(cudaMalloc(&_d_antenna_powers, _num_elements * sizeof(float)));
     CHECK_CUDA_ERROR_NON_OO(cudaMalloc(&_d_antenna_clips, _num_elements * sizeof(std::uint32_t)));
     CHECK_CUDA_ERROR_NON_OO(cudaMalloc(&_d_bad_antennas, _num_elements * sizeof(int)));
+    CHECK_CUDA_ERROR_NON_OO(cudaMalloc(&_d_alive_antennas, _num_elements * sizeof(int)));
 
     CHECK_CUDA_ERROR_NON_OO(cudaMallocHost(&_h_antenna_powers, _num_elements * sizeof(float)));
     CHECK_CUDA_ERROR_NON_OO(cudaMallocHost(&_h_antenna_clips, _num_elements * sizeof(std::uint32_t)));
@@ -270,6 +284,7 @@ void cudaAntennaMaskCommand::free_device_buffers() {
     if (_d_antenna_powers) { cudaFree(_d_antenna_powers); _d_antenna_powers = nullptr; }
     if (_d_antenna_clips) { cudaFree(_d_antenna_clips); _d_antenna_clips = nullptr; }
     if (_d_bad_antennas) { cudaFree(_d_bad_antennas); _d_bad_antennas = nullptr; }
+    if (_d_alive_antennas) { cudaFree(_d_alive_antennas); _d_alive_antennas = nullptr; }
 
     if (_h_antenna_powers) { cudaFreeHost(_h_antenna_powers); _h_antenna_powers = nullptr; }
     if (_h_antenna_clips) { cudaFreeHost(_h_antenna_clips); _h_antenna_clips = nullptr; }
@@ -371,6 +386,7 @@ cudaEvent_t cudaAntennaMaskCommand::execute(
         std::lock_guard<std::mutex> lk(_global_mutex);
         bool mask_changed = false;
         _current_bad_indices.clear();
+        _current_alive_indices.clear();
 
         for (int a = 0; a < _num_elements; ++a) {
             float p = _h_antenna_powers[a];
@@ -422,6 +438,8 @@ cudaEvent_t cudaAntennaMaskCommand::execute(
 
             if (new_mask_val == 0) {
                 _current_bad_indices.push_back(a);
+            } else {
+                _current_alive_indices.push_back(a);
             }
         }
 
@@ -432,9 +450,12 @@ cudaEvent_t cudaAntennaMaskCommand::execute(
     } else {
         std::lock_guard<std::mutex> lk(_global_mutex);
         _current_bad_indices.clear();
+        _current_alive_indices.clear();
         for (int a = 0; a < _num_elements; ++a) {
             if (_shared_mask[a] == 0) {
                 _current_bad_indices.push_back(a);
+            } else {
+                _current_alive_indices.push_back(a);
             }
         }
     }
@@ -448,6 +469,36 @@ cudaEvent_t cudaAntennaMaskCommand::execute(
         launch_zero_bad_antennas(
             d_voltages, _d_bad_antennas, static_cast<int>(_current_bad_indices.size()),
             total_spectra, _num_elements, stream);
+    }
+
+    // 5. Extract Alive Antennas baseband into compact buffer if requested
+    if (!_gpu_mem_alive_voltages.empty()) {
+        const std::size_t alive_bytes = static_cast<std::size_t>(_max_alive_antennas) *
+                                        static_cast<std::size_t>(_num_local_freq) *
+                                        static_cast<std::size_t>(_samples_per_data_set) *
+                                        sizeof(int4x2_t);
+        void* alive_memory = device.get_gpu_memory_array(_gpu_mem_alive_voltages, gpu_frame_id,
+                                                         _gpu_buffer_depth, alive_bytes);
+        if (alive_memory) {
+            int num_to_extract = static_cast<int>(std::min(static_cast<std::size_t>(_max_alive_antennas),
+                                                           _current_alive_indices.size()));
+            if (num_to_extract > 0) {
+                CHECK_CUDA_ERROR_NON_OO(cudaMemcpyAsync(
+                    _d_alive_antennas, _current_alive_indices.data(),
+                    num_to_extract * sizeof(int), cudaMemcpyHostToDevice, stream));
+            }
+
+            int4x2_t* d_alive_voltages = reinterpret_cast<int4x2_t*>(alive_memory);
+            launch_extract_alive_antennas(
+                d_voltages, d_alive_voltages, _d_alive_antennas,
+                num_to_extract, _max_alive_antennas, total_spectra, _num_elements, stream);
+
+            std::shared_ptr<metadataObject> meta =
+                device.get_gpu_memory_array_metadata(_gpu_mem_voltage, gpu_frame_id);
+            if (meta) {
+                device.claim_gpu_memory_array_metadata(_gpu_mem_alive_voltages, gpu_frame_id, meta);
+            }
+        }
     }
 
     return record_end_event();

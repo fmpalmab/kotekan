@@ -55,7 +55,7 @@ struct AntennaHealthMetrics {
 struct AntennaMaskConfig {
     bool auto_detect_enabled = true;
     bool blank_voltages_enabled = true;   ///< Level 1: In-place zeroing of bad antennas in GPU memory
-    float dead_power_threshold = 0.50f;   ///< Mean power <= this value classified as DEAD (open ADC noise floor ~0.25)
+    float dead_power_threshold = 5.0f;    ///< Mean power <= this value classified as DEAD (open ADC noise floor ~0.25)
     float sat_power_threshold = 80.0f;    ///< Mean power >= this value classified as SATURATED
     float clip_fraction_threshold = 0.15f;///< Clipping fraction >= this value classified as SATURATED (15%)
     std::uint16_t revival_frames = 5;     ///< Required consecutive healthy frames to revive a masked antenna
@@ -110,6 +110,20 @@ void launch_zero_bad_antennas(
     int4x2_t* __restrict__ d_voltages,
     const int* __restrict__ d_bad_antennas,
     int num_bad_antennas,
+    std::size_t total_spectra,
+    std::size_t n_ant,
+    cudaStream_t stream);
+
+/**
+ * @brief Extracts the alive antennas from the full voltage buffer into a compact
+ *        contiguous baseband buffer for disk streaming and recording.
+ */
+void launch_extract_alive_antennas(
+    const int4x2_t* __restrict__ d_voltages,
+    int4x2_t* __restrict__ d_alive_voltages,
+    const int* __restrict__ d_alive_antennas,
+    int num_to_extract,
+    int max_alive_antennas,
     std::size_t total_spectra,
     std::size_t n_ant,
     cudaStream_t stream);
