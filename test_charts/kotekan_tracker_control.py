@@ -139,10 +139,32 @@ class KotekanTrackerClient:
         payload = {"num_active_beams": int(num_active_beams)}
         return self._post("/beam_tracker/enable_beam", payload)
 
+    def get_antenna_mask_status(self) -> Dict[str, Any]:
+        """Query /antenna_mask/status."""
+        return self._get("/antenna_mask/status")
+
+    def mask_antenna_stage(self, antenna_id: int) -> str:
+        """Mask antenna via /antenna_mask/mask."""
+        return self._post("/antenna_mask/mask", {"antenna_id": int(antenna_id)})
+
+    def unmask_antenna_stage(self, antenna_id: int) -> str:
+        """Unmask antenna via /antenna_mask/unmask."""
+        return self._post("/antenna_mask/unmask", {"antenna_id": int(antenna_id)})
+
+    def reset_antenna_masks(self) -> str:
+        """Reset all antenna masks via /antenna_mask/reset."""
+        return self._post("/antenna_mask/reset", {})
+
     def mask_antenna(self, antenna_id: int, enabled: bool) -> str:
         """Mask (disable) or unmask (enable) a specific antenna."""
-        payload = {"antenna_id": int(antenna_id), "enabled": bool(enabled)}
-        return self._post("/beam_tracker/mask_antenna", payload)
+        try:
+            if enabled:
+                return self.unmask_antenna_stage(antenna_id)
+            else:
+                return self.mask_antenna_stage(antenna_id)
+        except Exception:
+            payload = {"antenna_id": int(antenna_id), "enabled": bool(enabled)}
+            return self._post("/beam_tracker/mask_antenna", payload)
 
     def set_antenna_mask(
         self,
@@ -267,6 +289,40 @@ def print_status_dashboard(status: Dict[str, Any], latency_ms: float):
 
     print("\n SKY RECEPTIVITY FOOTPRINT (Hemisphere Topocentric Projection):")
     print(render_ascii_skymap(trajectories, active_count))
+    print("=" * 80)
+
+
+def print_antenna_mask_dashboard(mask_status: Dict[str, Any]):
+    """Print a clean terminal dashboard of antenna health and masking telemetry."""
+    print("=" * 80)
+    print(" CHARTS ANTENNA HEALTH & MASKING STAGE TELEMETRY")
+    print("=" * 80)
+    n_ant = mask_status.get("num_elements", 0)
+    active = mask_status.get("active_antennas", 0)
+    masked = mask_status.get("masked_antennas", 0)
+    dead = mask_status.get("dead_antennas", 0)
+    sat = mask_status.get("saturated_antennas", 0)
+    manual = mask_status.get("manual_masked_antennas", 0)
+
+    print(f" Version                : {mask_status.get('version', 'N/A')}")
+    print(f" Elements (Total/Active): {n_ant} / {active} (Masked: {masked})")
+    print(f" Breakdown              : Dead: {dead} | Saturated: {sat} | Manual Mask: {manual}")
+    thresh = mask_status.get("thresholds", {})
+    clip_pct = thresh.get('clip_fraction_threshold', 0.02) * 100.0
+    print(f" Thresholds             : Dead <= {thresh.get('dead_power_threshold', 0.05)} | Sat >= {thresh.get('sat_power_threshold', 80.0)} | Clip >= {clip_pct:.1f}%")
+    print("-" * 80)
+    print(" | Ant ID | State       | Active | Mean Power | Clip Frac (%) | Clip Count | Healthy Frames |")
+    print(" +--------+-------------+--------+------------+---------------+------------+----------------+")
+    for ant in mask_status.get("antennas", []):
+        aid = ant.get("id", 0)
+        st = ant.get("status", "UNKNOWN")
+        act = "YES" if ant.get("active", False) else "NO "
+        pwr = ant.get("power", 0.0)
+        clip_f = ant.get("clipping_fraction", 0.0) * 100.0
+        clip_c = ant.get("clipped_count", 0)
+        rec = ant.get("consecutive_healthy", 0)
+        print(f" | {aid:6d} | {st:11s} | {act:6s} | {pwr:10.4f} | {clip_f:12.2f}% | {clip_c:10d} | {rec:14d} |")
+    print(" +--------+-------------+--------+------------+---------------+------------+----------------+")
     print("=" * 80)
 
 
@@ -699,6 +755,12 @@ def main():
     # Interactive command
     subparsers.add_parser("interactive", help="Start interactive steering console")
 
+    # Mask status command
+    subparsers.add_parser("mask-status", help="Display live antenna health and masking metrics (/antenna_mask/status)")
+
+    # Reset mask command
+    subparsers.add_parser("reset-mask", help="Reset all antenna masks to active (/antenna_mask/reset)")
+
     args = parser.parse_args()
     client = KotekanTrackerClient(host=args.host, port=args.port)
 
@@ -707,6 +769,18 @@ def main():
         st = client.get_status()
         t1 = time.perf_counter()
         print_status_dashboard(st, (t1 - t0) * 1000.0)
+    elif args.command == "mask-status":
+        try:
+            m_status = client.get_antenna_mask_status()
+            print_antenna_mask_dashboard(m_status)
+        except Exception as e:
+            print(f"[ERROR] Failed to query /antenna_mask/status: {e}")
+    elif args.command == "reset-mask":
+        try:
+            resp = client.reset_antenna_masks()
+            print(f"Success: {resp}")
+        except Exception as e:
+            print(f"[ERROR] Failed to reset masks: {e}")
     elif args.command == "steer-lm":
         resp = client.steer_lm(args.beam, args.l0, args.m0, args.dl, args.dm)
         print(f"Success: {resp}")

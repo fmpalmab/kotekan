@@ -53,7 +53,10 @@ __global__ void inspect_antenna_health_kernel(
         decode_int4x2(byte_val, re, im);
 
         local_power += static_cast<float>(re * re + im * im);
-        if (re == 7 || re == -8 || im == 7 || im == -8) {
+        if (re == 7 || re == -8) {
+            local_clips++;
+        }
+        if (im == 7 || im == -8) {
             local_clips++;
         }
     }

@@ -66,6 +66,22 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
             }
         }
 
+        auto active_raw = config.get_default<std::vector<int>>(unique_name, "active_raw_elements", {});
+        if (!active_raw.empty()) {
+            _shared_config.manual_mask.fill(0);
+            _shared_mask.fill(0);
+            for (std::size_t i = 0; i < MAX_MASK_ANTENNAS; ++i) {
+                _shared_metrics[i].status = AntennaHealthStatus::MANUAL_MASK;
+                _shared_metrics[i].consecutive_healthy = 0;
+            }
+            for (int r : active_raw) {
+                if (r >= 0 && r < _num_elements && r < static_cast<int>(MAX_MASK_ANTENNAS)) {
+                    _shared_config.manual_mask[r] = 1;
+                    _shared_mask[r] = 1;
+                }
+            }
+        }
+
         // Initialize metrics
         for (std::size_t i = 0; i < MAX_MASK_ANTENNAS; ++i) {
             if (_shared_mask[i] != 0) {

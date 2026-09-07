@@ -7,26 +7,34 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KOTEKAN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 KOTEKAN_BIN="${KOTEKAN_ROOT}/build/kotekan/kotekan"
-# Mode selection: default is live in-memory (no disk writing). Pass --record to write files.
-RECORD_MODE=0
+# Mode selection: default is live in-memory (no disk writing). Pass --direct, --direct-512ms, or --record.
+MODE="live"
 for arg in "$@"; do
     case "${arg}" in
         --record)
-            RECORD_MODE=1
+            MODE="record"
+            ;;
+        --direct|--direct-optimal|--fast)
+            MODE="direct"
+            ;;
+        --direct-512ms|--direct-legacy)
+            MODE="direct_512ms"
             ;;
         --live|--no-write)
-            RECORD_MODE=0
+            MODE="live"
             ;;
         --help|-h)
-            echo "Usage: $0 [--live | --record]"
-            echo "  --live     : Run live beam tracking in RAM/GPU without writing files (default)"
-            echo "  --record   : Stream formed beam complex voltages to NVMe disk (/data/tracker/tracker_32ant)"
+            echo "Usage: $0 [--live | --direct | --direct-512ms | --record]"
+            echo "  --direct       : (Recommended) Run optimal low-latency (12.8ms / 3,840-sample, ~495MB VRAM) Direct Beam Tracker"
+            echo "  --direct-512ms : Run large 512ms batch (153,600-sample, 13.2GB VRAM) Direct Beam Tracker"
+            echo "  --live         : Run legacy V5 integrated beam tracking in RAM/GPU"
+            echo "  --record       : Stream formed beam complex voltages to NVMe disk (/data/tracker/tracker_32ant)"
             exit 0
             ;;
     esac
 done
 
-if [ "${RECORD_MODE}" -eq 1 ]; then
+if [ "${MODE}" = "record" ]; then
     CONFIG_FILE="${SCRIPT_DIR}/32antennas_tracker_record.yaml"
     MODE_DESC="RECORDING TO DISK (/data/tracker/tracker_32ant)"
     OUTPUT_DIR="/data/tracker/tracker_32ant"
@@ -35,9 +43,17 @@ if [ "${RECORD_MODE}" -eq 1 ]; then
         OUTPUT_DIR="/tmp/tracker_32ant"
         mkdir -p "${OUTPUT_DIR}"
     }
+elif [ "${MODE}" = "direct" ]; then
+    CONFIG_FILE="${SCRIPT_DIR}/32antennas_direct_tracker_optimal.yaml"
+    MODE_DESC="OPTIMAL DIRECT BEAM TRACKER (12.8ms / 3,840 Samples, ~495MB VRAM)"
+    OUTPUT_DIR="None (RAM / REST snapshot only)"
+elif [ "${MODE}" = "direct_512ms" ]; then
+    CONFIG_FILE="${SCRIPT_DIR}/32antennas_direct_tracker.yaml"
+    MODE_DESC="DIRECT BEAM TRACKER 512ms BATCH (153,600 Samples, 13.2GB VRAM)"
+    OUTPUT_DIR="None (RAM / REST snapshot only)"
 else
     CONFIG_FILE="${SCRIPT_DIR}/32antennas_tracker.yaml"
-    MODE_DESC="LIVE IN-MEMORY (NO DISK WRITING)"
+    MODE_DESC="LIVE IN-MEMORY V5 (NO DISK WRITING)"
     OUTPUT_DIR="None (RAM / REST snapshot only)"
 fi
 
