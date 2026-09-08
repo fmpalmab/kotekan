@@ -91,6 +91,8 @@ dpdkCore::dpdkCore(Config& config, const string& unique_name, bufferContainer& b
     const uint32_t mbuf_size = mbuf_data_size + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM;
     INFO("DPDK mbuf data size: {:d} bytes, mbuf size: {:d} bytes", mbuf_data_size, mbuf_size);
 
+    startup_sleep = config.get_default<uint32_t>(unique_name, "startup_sleep", 0);
+
     // Convert the lcore to port map into a simple c style struct
     // This is basically done to remove overhead in the critial packet processing loop.
     // TODO check there are no ports assigned twice
@@ -405,10 +407,12 @@ int dpdkCore::lcore_rx(void* args) {
         }
     }
 
-    // TODO Figure out why this sleep is need.  It seems like the when starting the E810
-    // ports, there is a delay between when they are started in DPDK and when they become
-    // ready.  There might be a function to check their readness state we could query?
-    sleep(40);
+    // Optional link stabilization sleep if specified in configuration
+    if (core->startup_sleep > 0) {
+        INFO_NON_OO("DPDK lcore {:d}: Waiting {:d}s for E810 link stabilization before starting RX...", lcore, core->startup_sleep);
+        sleep(core->startup_sleep);
+        INFO_NON_OO("DPDK lcore {:d}: Finished waiting. Starting packet processing loop.", lcore);
+    }
     while (!core->stop_thread) {
         for (uint32_t i = 0; i < num_local_ports; ++i) {
             uint32_t port = ports[i];
