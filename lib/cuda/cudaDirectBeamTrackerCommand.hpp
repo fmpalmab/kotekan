@@ -31,8 +31,9 @@ public:
     cudaEvent_t execute(cudaPipelineState& pipestate,
                         const std::vector<cudaEvent_t>& pre_events) override;
 
-    static void set_shared_antenna_mask(const std::array<std::uint8_t, MAX_DIRECT_ANTENNAS>& mask);
+    static void set_shared_antenna_mask(const std::array<std::uint8_t, MAX_DIRECT_ANTENNAS>& mask, int n_active = -1);
     static std::array<std::uint8_t, MAX_DIRECT_ANTENNAS> get_shared_antenna_mask();
+    static DirectBeamTrackerConfig get_shared_config();
 
 private:
     void allocate_device_buffers();
@@ -60,9 +61,14 @@ private:
 
     std::vector<double> _frequencies_hz;
 
+    // Subframe phase interpolation
+    bool _enable_subframe_interpolation = true;
+
     // Persistent GPU buffers allocated once
     float2* _d_weights = nullptr;
+    float2* _d_step_weights = nullptr;
     DirectDirection3D* _d_directions = nullptr;
+    DirectDirection3D* _d_directions_end = nullptr;
     double* _d_wavenumbers = nullptr;
     float3* _d_antenna_positions = nullptr;
     std::uint8_t* _d_antenna_mask = nullptr;

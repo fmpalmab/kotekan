@@ -49,6 +49,29 @@ int lookup_nearest_sky_grid(float l, float m, const std::vector<float2>& grid_di
 
 namespace {
 
+__device__ __forceinline__ float2 complex_mul(float2 a, float2 b) {
+    return make_float2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+__device__ __forceinline__ float2 complex_pow_int(float2 z, std::size_t exp) {
+    float2 res = make_float2(1.0f, 0.0f);
+    float2 base = z;
+    while (exp > 0) {
+        if (exp & 1) {
+            res = complex_mul(res, base);
+        }
+        base = complex_mul(base, base);
+        exp >>= 1;
+    }
+    const float norm_sq = res.x * res.x + res.y * res.y;
+    if (norm_sq > 0.0f) {
+        const float inv_r = rsqrtf(norm_sq);
+        res.x *= inv_r;
+        res.y *= inv_r;
+    }
+    return res;
+}
+
 __device__ __forceinline__ float2 unpack_int4_direct(const std::uint8_t* ptr) {
 #if defined(__CUDA_ARCH__)
     const std::uint32_t byte_val = static_cast<std::uint32_t>(__ldg(ptr));
@@ -66,14 +89,18 @@ __device__ __forceinline__ float2 unpack_int4_direct(const std::uint8_t* ptr) {
 
 __global__ void generate_steering_weights_kernel(
     float2* __restrict__ weights,
-    const DirectDirection3D* __restrict__ directions,
+    float2* __restrict__ step_weights,
+    const DirectDirection3D* __restrict__ directions_start,
+    const DirectDirection3D* __restrict__ directions_end,
     const double* __restrict__ wavenumbers,
     const float3* __restrict__ antenna_positions,
     const std::uint8_t* __restrict__ antenna_mask,
     const float2* __restrict__ calibration_gains,
     const std::size_t num_beams,
     const std::size_t n_freq,
-    const std::size_t n_ant) {
+    const std::size_t n_ant,
+    const std::size_t n_time,
+    const std::size_t n_active) {
 
     const std::size_t idx = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     const std::size_t total = num_beams * n_freq * n_ant;
@@ -86,22 +113,26 @@ __global__ void generate_steering_weights_kernel(
 
     if (antenna_mask != nullptr && __ldg(&antenna_mask[ant]) == 0) {
         weights[idx] = make_float2(0.0f, 0.0f);
+        if (step_weights != nullptr) {
+            step_weights[idx] = make_float2(1.0f, 0.0f);
+        }
         return;
     }
 
-    const DirectDirection3D dir = directions[beam];
+    const DirectDirection3D dir0 = directions_start[beam];
     const float3 pos = antenna_positions[ant];
     const double wave_num = __ldg(&wavenumbers[freq]);
 
-    const double delay_m = static_cast<double>(pos.x) * dir.x +
-                           static_cast<double>(pos.y) * dir.y +
-                           static_cast<double>(pos.z) * dir.z;
-    const float phase = static_cast<float>(wave_num * delay_m);
-    float s, c;
-    __sincosf(phase, &s, &c);
+    const double delay_m0 = static_cast<double>(pos.x) * dir0.x +
+                            static_cast<double>(pos.y) * dir0.y +
+                            static_cast<double>(pos.z) * dir0.z;
+    const float phase0 = static_cast<float>(wave_num * delay_m0);
+    float s0, c0;
+    __sincosf(phase0, &s0, &c0);
 
-    float wr = c;
-    float wi = s;
+    const float norm = (n_active > 0) ? (1.0f / sqrtf(static_cast<float>(n_active))) : 0.0f;
+    float wr = c0 * norm;
+    float wi = s0 * norm;
 
     if (calibration_gains != nullptr) {
         const float2 g = __ldg(&calibration_gains[freq * n_ant + ant]);
@@ -113,6 +144,22 @@ __global__ void generate_steering_weights_kernel(
     }
 
     weights[idx] = make_float2(wr, wi);
+
+    if (step_weights != nullptr) {
+        if (directions_end != nullptr && n_time > 0) {
+            const DirectDirection3D dir1 = directions_end[beam];
+            const double delay_m1 = static_cast<double>(pos.x) * dir1.x +
+                                    static_cast<double>(pos.y) * dir1.y +
+                                    static_cast<double>(pos.z) * dir1.z;
+            const float phase1 = static_cast<float>(wave_num * delay_m1);
+            const float delta_phase = (phase1 - phase0) / static_cast<float>(n_time);
+            float sd, cd;
+            __sincosf(delta_phase, &sd, &cd);
+            step_weights[idx] = make_float2(cd, sd);
+        } else {
+            step_weights[idx] = make_float2(1.0f, 0.0f);
+        }
+    }
 }
 
 __global__ void precompute_sky_grid_kernel(
@@ -124,7 +171,8 @@ __global__ void precompute_sky_grid_kernel(
     const float2* __restrict__ calibration_gains,
     const std::size_t num_grid_points,
     const std::size_t n_freq,
-    const std::size_t n_ant) {
+    const std::size_t n_ant,
+    const std::size_t n_active) {
 
     const std::size_t idx = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     const std::size_t total = num_grid_points * n_freq * n_ant;
@@ -156,8 +204,9 @@ __global__ void precompute_sky_grid_kernel(
     float s, c;
     __sincosf(phase, &s, &c);
 
-    float wr = c;
-    float wi = s;
+    const float norm = (n_active > 0) ? (1.0f / sqrtf(static_cast<float>(n_active))) : 0.0f;
+    float wr = c * norm;
+    float wi = s * norm;
 
     if (calibration_gains != nullptr) {
         const float2 g = __ldg(&calibration_gains[freq * n_ant + ant]);
@@ -170,11 +219,12 @@ __global__ void precompute_sky_grid_kernel(
     grid_weights[idx] = make_float2(wr, wi);
 }
 
-template <int N_ANT, int B_TILE, int TIME_UNROLL>
+template <int N_ANT, int B_TILE, int TIME_UNROLL, bool INTERPOLATE = false>
 __global__ void __launch_bounds__(128)
 direct_beamformer_fused_multibeam_kernel(
     float2* __restrict__ voltages,
     const float2* __restrict__ weights,
+    const float2* __restrict__ step_weights,
     const std::uint8_t* __restrict__ packed,
     const std::size_t n_time,
     const std::size_t n_freq,
@@ -201,15 +251,25 @@ direct_beamformer_fused_multibeam_kernel(
     const std::size_t freq = rest % n_freq;
     const std::size_t chunk_idx = rest / n_freq;
 
+    const std::size_t t_start = chunk_idx * time_chunk_size;
+    if (t_start >= n_time) {
+        return;
+    }
+    const std::size_t t_end = (t_start + time_chunk_size < n_time)
+                                  ? (t_start + time_chunk_size)
+                                  : n_time;
+
     const std::size_t b_base = tile_idx * B_TILE;
     const unsigned int active_in_tile = (b_base + B_TILE <= num_active_beams)
                                             ? B_TILE
                                             : static_cast<unsigned int>(num_active_beams - b_base);
 
-    // 1. Load precomputed weights for all B_TILE beams into registers for this warp
+    // 1. Load weights (and optional step rotators) into registers for this warp
     float w_r[B_TILE][ANT_PER_LANE];
     float w_i[B_TILE][ANT_PER_LANE];
     float nw_i[B_TILE][ANT_PER_LANE];
+    float dw_r[B_TILE][ANT_PER_LANE];
+    float dw_i[B_TILE][ANT_PER_LANE];
 
     #pragma unroll
     for (int b = 0; b < B_TILE; ++b) {
@@ -222,24 +282,41 @@ direct_beamformer_fused_multibeam_kernel(
             if (b < active_in_tile) {
                 const unsigned int elem = lane + a * 32U;
                 const float2 w = __ldg(&weights[w_base + elem]);
-                w_r[b][a] = w.x;
-                w_i[b][a] = w.y;
-                nw_i[b][a] = -w.y;
+
+                if constexpr (INTERPOLATE) {
+                    const float2 dw = __ldg(&step_weights[w_base + elem]);
+                    dw_r[b][a] = dw.x;
+                    dw_i[b][a] = dw.y;
+
+                    // Re-anchor chunk start weights at t_start using binary exponentiation
+                    if (t_start > 0) {
+                        const float2 pow_dw = complex_pow_int(dw, t_start);
+                        const float cur_r = w.x * pow_dw.x - w.y * pow_dw.y;
+                        const float cur_i = w.x * pow_dw.y + w.y * pow_dw.x;
+                        w_r[b][a] = cur_r;
+                        w_i[b][a] = cur_i;
+                        nw_i[b][a] = -cur_i;
+                    } else {
+                        w_r[b][a] = w.x;
+                        w_i[b][a] = w.y;
+                        nw_i[b][a] = -w.y;
+                    }
+                } else {
+                    w_r[b][a] = w.x;
+                    w_i[b][a] = w.y;
+                    nw_i[b][a] = -w.y;
+                }
             } else {
                 w_r[b][a] = 0.0F;
                 w_i[b][a] = 0.0F;
                 nw_i[b][a] = 0.0F;
+                if constexpr (INTERPOLATE) {
+                    dw_r[b][a] = 1.0F;
+                    dw_i[b][a] = 0.0F;
+                }
             }
         }
     }
-
-    const std::size_t t_start = chunk_idx * time_chunk_size;
-    if (t_start >= n_time) {
-        return;
-    }
-    const std::size_t t_end = (t_start + time_chunk_size < n_time)
-                                  ? (t_start + time_chunk_size)
-                                  : n_time;
 
     const std::size_t t_stride = n_freq * N_ANT;
     const std::size_t voltage_stride = n_freq * max_beams_stride;
@@ -257,20 +334,57 @@ direct_beamformer_fused_multibeam_kernel(
         for (unsigned int a = 0; a < ANT_PER_LANE; ++a) {
             const unsigned int a_offset = a * 32U;
 
-            #pragma unroll
-            for (int k = 0; k < TIME_UNROLL; ++k) {
-                // LOAD RAW VOLTAGE SAMPLE ONCE WITH FAST UNPACK
-                const float2 p = unpack_int4_direct(&packed_ptr[k * t_stride + a_offset]);
-
-                // MULTIPLY-ACCUMULATE ACROSS ALL B_TILE BEAMS SIMULTANEOUSLY
+            if constexpr (INTERPOLATE) {
+                float wra[B_TILE];
+                float wia[B_TILE];
+                float nwi[B_TILE];
                 #pragma unroll
                 for (int b = 0; b < B_TILE; ++b) {
-                    const float wra = w_r[b][a];
-                    const float wia = w_i[b][a];
-                    const float nwi = nw_i[b][a];
+                    wra[b] = w_r[b][a];
+                    wia[b] = w_i[b][a];
+                    nwi[b] = nw_i[b][a];
+                }
 
-                    s_r[b][k] = fmaf(wra, p.x, fmaf(nwi, p.y, s_r[b][k]));
-                    s_i[b][k] = fmaf(wra, p.y, fmaf(wia, p.x, s_i[b][k]));
+                #pragma unroll
+                for (int k = 0; k < TIME_UNROLL; ++k) {
+                    const float2 p = unpack_int4_direct(&packed_ptr[k * t_stride + a_offset]);
+
+                    #pragma unroll
+                    for (int b = 0; b < B_TILE; ++b) {
+                        s_r[b][k] = fmaf(wra[b], p.x, fmaf(nwi[b], p.y, s_r[b][k]));
+                        s_i[b][k] = fmaf(wra[b], p.y, fmaf(wia[b], p.x, s_i[b][k]));
+
+                        // Rotate phasor for next time sample: W(t+k+1) = W(t+k) * dW
+                        const float dwr = dw_r[b][a];
+                        const float dwi = dw_i[b][a];
+                        const float next_r = wra[b] * dwr - wia[b] * dwi;
+                        const float next_i = wra[b] * dwi + wia[b] * dwr;
+                        wra[b] = next_r;
+                        wia[b] = next_i;
+                        nwi[b] = -next_i;
+                    }
+                }
+
+                #pragma unroll
+                for (int b = 0; b < B_TILE; ++b) {
+                    w_r[b][a] = wra[b];
+                    w_i[b][a] = wia[b];
+                    nw_i[b][a] = nwi[b];
+                }
+            } else {
+                #pragma unroll
+                for (int k = 0; k < TIME_UNROLL; ++k) {
+                    const float2 p = unpack_int4_direct(&packed_ptr[k * t_stride + a_offset]);
+
+                    #pragma unroll
+                    for (int b = 0; b < B_TILE; ++b) {
+                        const float wra = w_r[b][a];
+                        const float wia = w_i[b][a];
+                        const float nwi = nw_i[b][a];
+
+                        s_r[b][k] = fmaf(wra, p.x, fmaf(nwi, p.y, s_r[b][k]));
+                        s_i[b][k] = fmaf(wra, p.y, fmaf(wia, p.x, s_i[b][k]));
+                    }
                 }
             }
         }
@@ -314,8 +428,22 @@ direct_beamformer_fused_multibeam_kernel(
 
             #pragma unroll
             for (int b = 0; b < B_TILE; ++b) {
-                s_r[b] = fmaf(w_r[b][a], p.x, fmaf(nw_i[b][a], p.y, s_r[b]));
-                s_i[b] = fmaf(w_r[b][a], p.y, fmaf(w_i[b][a], p.x, s_i[b]));
+                const float wra = w_r[b][a];
+                const float wia = w_i[b][a];
+                const float nwi = nw_i[b][a];
+
+                s_r[b] = fmaf(wra, p.x, fmaf(nwi, p.y, s_r[b]));
+                s_i[b] = fmaf(wra, p.y, fmaf(wia, p.x, s_i[b]));
+
+                if constexpr (INTERPOLATE) {
+                    const float dwr = dw_r[b][a];
+                    const float dwi = dw_i[b][a];
+                    const float next_r = wra * dwr - wia * dwi;
+                    const float next_i = wra * dwi + wia * dwr;
+                    w_r[b][a] = next_r;
+                    w_i[b][a] = next_i;
+                    nw_i[b][a] = -next_i;
+                }
             }
         }
 
@@ -387,6 +515,7 @@ void set_l2_persisting_weights_policy(cudaStream_t stream, const void* ptr, std:
 void launch_direct_beamformer(
     const int4x2_t* d_packed,
     const float2* d_weights,
+    const float2* d_step_weights,
     float2* d_voltages,
     std::size_t n_time,
     std::size_t n_freq,
@@ -406,8 +535,6 @@ void launch_direct_beamformer(
     const std::size_t stride_beams = std::max(max_beams_stride, active_beams);
 
     // Auto-select optimal B_TILE (4, 2, or 1) based on active beam count and antenna count.
-    // For n_ant >= 256, ANT_PER_LANE=8, so B_TILE=4 would require 96 weight registers,
-    // spilling to local memory. Clamping B_TILE keeps all weights in registers.
     std::size_t b_tile = 1;
     if (beam_tile_size >= 4 && active_beams >= 4) {
         if (n_ant <= 64) {
@@ -436,42 +563,52 @@ void launch_direct_beamformer(
         static_cast<unsigned int>((total_warps + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK);
 
     const auto* packed_bytes = reinterpret_cast<const std::uint8_t*>(d_packed);
+    const bool interpolate = (d_step_weights != nullptr);
 
-    auto dispatch_kernel_combo = [&](auto ant_tag, auto b_tile_tag) {
+    auto dispatch_kernel_combo = [&](auto ant_tag, auto b_tile_tag, auto interp_tag) {
         constexpr int N_A = decltype(ant_tag)::value;
         constexpr int B_T = decltype(b_tile_tag)::value;
+        constexpr bool I_P = decltype(interp_tag)::value;
 
         if constexpr (B_T == 4) {
-            direct_beamformer_fused_multibeam_kernel<N_A, 4, 4><<<grid_dim, block_dim, 0, stream>>>(
-                d_voltages, d_weights, packed_bytes, n_time, n_freq,
+            direct_beamformer_fused_multibeam_kernel<N_A, 4, 4, I_P><<<grid_dim, block_dim, 0, stream>>>(
+                d_voltages, d_weights, d_step_weights, packed_bytes, n_time, n_freq,
                 time_chunk_size, active_beams, stride_beams, total_warps);
         } else if constexpr (B_T == 2) {
             if (time_unroll >= 8) {
-                direct_beamformer_fused_multibeam_kernel<N_A, 2, 8><<<grid_dim, block_dim, 0, stream>>>(
-                    d_voltages, d_weights, packed_bytes, n_time, n_freq,
+                direct_beamformer_fused_multibeam_kernel<N_A, 2, 8, I_P><<<grid_dim, block_dim, 0, stream>>>(
+                    d_voltages, d_weights, d_step_weights, packed_bytes, n_time, n_freq,
                     time_chunk_size, active_beams, stride_beams, total_warps);
             } else {
-                direct_beamformer_fused_multibeam_kernel<N_A, 2, 4><<<grid_dim, block_dim, 0, stream>>>(
-                    d_voltages, d_weights, packed_bytes, n_time, n_freq,
+                direct_beamformer_fused_multibeam_kernel<N_A, 2, 4, I_P><<<grid_dim, block_dim, 0, stream>>>(
+                    d_voltages, d_weights, d_step_weights, packed_bytes, n_time, n_freq,
                     time_chunk_size, active_beams, stride_beams, total_warps);
             }
         } else {
             if (time_unroll >= 8) {
-                direct_beamformer_fused_multibeam_kernel<N_A, 1, 8><<<grid_dim, block_dim, 0, stream>>>(
-                    d_voltages, d_weights, packed_bytes, n_time, n_freq,
+                direct_beamformer_fused_multibeam_kernel<N_A, 1, 8, I_P><<<grid_dim, block_dim, 0, stream>>>(
+                    d_voltages, d_weights, d_step_weights, packed_bytes, n_time, n_freq,
                     time_chunk_size, active_beams, stride_beams, total_warps);
             } else {
-                direct_beamformer_fused_multibeam_kernel<N_A, 1, 4><<<grid_dim, block_dim, 0, stream>>>(
-                    d_voltages, d_weights, packed_bytes, n_time, n_freq,
+                direct_beamformer_fused_multibeam_kernel<N_A, 1, 4, I_P><<<grid_dim, block_dim, 0, stream>>>(
+                    d_voltages, d_weights, d_step_weights, packed_bytes, n_time, n_freq,
                     time_chunk_size, active_beams, stride_beams, total_warps);
             }
         }
     };
 
+    auto dispatch_interp = [&](auto ant_tag, auto b_tile_tag) {
+        if (interpolate) {
+            dispatch_kernel_combo(ant_tag, b_tile_tag, std::true_type{});
+        } else {
+            dispatch_kernel_combo(ant_tag, b_tile_tag, std::false_type{});
+        }
+    };
+
     auto dispatch_b_tile = [&](auto ant_tag) {
-        if (b_tile == 4) dispatch_kernel_combo(ant_tag, std::integral_constant<int, 4>{});
-        else if (b_tile == 2) dispatch_kernel_combo(ant_tag, std::integral_constant<int, 2>{});
-        else dispatch_kernel_combo(ant_tag, std::integral_constant<int, 1>{});
+        if (b_tile == 4) dispatch_interp(ant_tag, std::integral_constant<int, 4>{});
+        else if (b_tile == 2) dispatch_interp(ant_tag, std::integral_constant<int, 2>{});
+        else dispatch_interp(ant_tag, std::integral_constant<int, 1>{});
     };
 
     switch (n_ant) {
@@ -488,7 +625,9 @@ void launch_direct_beamformer(
 
 void launch_generate_steering_weights(
     float2* d_weights,
-    const DirectDirection3D* d_directions,
+    float2* d_step_weights,
+    const DirectDirection3D* d_directions_start,
+    const DirectDirection3D* d_directions_end,
     const double* d_wavenumbers,
     const float3* d_antenna_positions,
     const std::uint8_t* d_antenna_mask,
@@ -496,24 +635,34 @@ void launch_generate_steering_weights(
     std::size_t num_beams,
     std::size_t n_freq,
     std::size_t n_ant,
+    std::size_t n_time,
+    std::size_t n_active,
     cudaStream_t stream) {
 
     const std::size_t total_weights = num_beams * n_freq * n_ant;
     if (total_weights == 0) return;
+
+    if (n_active == 0) {
+        n_active = n_ant;
+    }
 
     constexpr int BLOCK_SIZE = 256;
     const unsigned int grid_size = static_cast<unsigned int>((total_weights + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
     generate_steering_weights_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
         d_weights,
-        d_directions,
+        d_step_weights,
+        d_directions_start,
+        d_directions_end,
         d_wavenumbers,
         d_antenna_positions,
         d_antenna_mask,
         d_calibration_gains,
         num_beams,
         n_freq,
-        n_ant);
+        n_ant,
+        n_time,
+        n_active);
 }
 
 void launch_precompute_sky_grid(
@@ -526,10 +675,15 @@ void launch_precompute_sky_grid(
     std::size_t num_grid_points,
     std::size_t n_freq,
     std::size_t n_ant,
+    std::size_t n_active,
     cudaStream_t stream) {
 
     const std::size_t total_weights = num_grid_points * n_freq * n_ant;
     if (total_weights == 0) return;
+
+    if (n_active == 0) {
+        n_active = n_ant;
+    }
 
     constexpr int BLOCK_SIZE = 256;
     const unsigned int grid_size = static_cast<unsigned int>((total_weights + BLOCK_SIZE - 1) / BLOCK_SIZE);
@@ -543,7 +697,8 @@ void launch_precompute_sky_grid(
         d_calibration_gains,
         num_grid_points,
         n_freq,
-        n_ant);
+        n_ant,
+        n_active);
 }
 
 } // namespace kotekan

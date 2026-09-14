@@ -1,0 +1,438 @@
+#include "cudaTransientTriggerCommand.hpp"
+#include "cudaTransientTrigger.hpp"
+#include "cudaUtils.hpp"
+#include "gpuCommand.hpp"
+#include "kotekanLogging.hpp"
+#include "restServer.hpp"
+
+#include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <filesystem>
+#include <fstream>
+#include <future>
+#include <iomanip>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <tuple>
+#include <vector>
+
+using kotekan::bufferContainer;
+using kotekan::Config;
+using kotekan::connectionInstance;
+using kotekan::HTTP_RESPONSE;
+using kotekan::restServer;
+using kotekan::cudaTransientTriggerCommand;
+
+REGISTER_CUDA_COMMAND(cudaTransientTriggerCommand);
+
+namespace kotekan {
+
+std::mutex cudaTransientTriggerCommand::_global_mutex;
+TransientTriggerConfig cudaTransientTriggerCommand::_shared_config;
+bool cudaTransientTriggerCommand::_endpoints_registered = false;
+std::atomic<bool> cudaTransientTriggerCommand::_manual_trigger_requested(false);
+uint32_t cudaTransientTriggerCommand::_total_triggers_fired = 0;
+TransientFrameMetrics cudaTransientTriggerCommand::_last_trigger_metrics;
+std::string cudaTransientTriggerCommand::_last_dump_path = "none";
+
+void cudaTransientTriggerCommand::set_shared_config(const TransientTriggerConfig& config) {
+    std::lock_guard<std::mutex> lock(_global_mutex);
+    _shared_config = config;
+}
+
+TransientTriggerConfig cudaTransientTriggerCommand::get_shared_config() {
+    std::lock_guard<std::mutex> lock(_global_mutex);
+    return _shared_config;
+}
+
+void cudaTransientTriggerCommand::trigger_manual() {
+    _manual_trigger_requested.store(true);
+}
+
+cudaTransientTriggerCommand::cudaTransientTriggerCommand(
+    Config& config, const std::string& unique_name,
+    bufferContainer& host_buffers, cudaDeviceInterface& device, int inst)
+    : cudaCommand(config, unique_name, host_buffers, device, inst,
+                  no_cuda_command_state, "cudaTransientTriggerCommand") {
+
+    _num_local_freq = config.get<int>(unique_name, "num_local_freq");
+    _samples_per_data_set = config.get<int>(unique_name, "samples_per_data_set");
+    _buffer_depth = config.get<int>(unique_name, "buffer_depth");
+    _max_beams = config.get_default<int>(unique_name, "max_beams", 2);
+
+    _gpu_mem_cleaned_beams = config.get_default<std::string>(
+        unique_name, "gpu_mem_cleaned_beams", "cleaned_beams");
+    _gpu_mem_output = config.get_default<std::string>(
+        unique_name, "gpu_mem_output", _gpu_mem_cleaned_beams);
+
+    _ring_buffer_depth = static_cast<uint32_t>(config.get_default<int>(
+        unique_name, "ring_buffer_depth", 32));
+    _pre_trigger_frames = static_cast<uint32_t>(config.get_default<int>(
+        unique_name, "pre_trigger_frames", 4));
+    _post_trigger_frames = static_cast<uint32_t>(config.get_default<int>(
+        unique_name, "post_trigger_frames", 4));
+
+    // Register GPU buffers used in Kotekan framework
+    gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_cleaned_beams, true, false, false));
+    if (_gpu_mem_output != _gpu_mem_cleaned_beams) {
+        gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_output, false, true, false));
+    }
+
+    _frame_elements = static_cast<std::size_t>(_samples_per_data_set) *
+                      static_cast<std::size_t>(_num_local_freq) *
+                      static_cast<std::size_t>(_max_beams);
+    _frame_bytes = _frame_elements * sizeof(float2);
+
+    {
+        std::lock_guard<std::mutex> lock(_global_mutex);
+        _shared_config.enabled = config.get_default<bool>(unique_name, "enabled", true);
+        _shared_config.sk_threshold = config.get_default<float>(unique_name, "sk_threshold", 0.08f);
+        _shared_config.rfi_threshold = config.get_default<float>(unique_name, "rfi_threshold", 0.30f);
+        _shared_config.min_flagged_channels = static_cast<uint32_t>(config.get_default<int>(
+            unique_name, "min_flagged_channels", 8));
+        _shared_config.ring_buffer_depth = _ring_buffer_depth;
+        _shared_config.pre_trigger_frames = _pre_trigger_frames;
+        _shared_config.post_trigger_frames = _post_trigger_frames;
+        _shared_config.dump_directory = config.get_default<std::string>(
+            unique_name, "dump_directory", "./transient_dumps");
+        _shared_config.auto_dump_enabled = config.get_default<bool>(
+            unique_name, "auto_dump_enabled", true);
+
+        if (!_endpoints_registered) {
+            auto& rest = restServer::instance();
+
+            // 1. GET /transient_trigger/status
+            auto status_cb = [](connectionInstance& conn) {
+                nlohmann::json reply;
+                std::lock_guard<std::mutex> lk(_global_mutex);
+                reply["version"] = "cudaTransientTriggerCommand v1.0 (SK & Inter-Beam Cross-Correlation)";
+                reply["enabled"] = _shared_config.enabled;
+                reply["sk_threshold"] = _shared_config.sk_threshold;
+                reply["rfi_threshold"] = _shared_config.rfi_threshold;
+                reply["min_flagged_channels"] = _shared_config.min_flagged_channels;
+                reply["ring_buffer_depth"] = _shared_config.ring_buffer_depth;
+                reply["pre_trigger_frames"] = _shared_config.pre_trigger_frames;
+                reply["post_trigger_frames"] = _shared_config.post_trigger_frames;
+                reply["dump_directory"] = _shared_config.dump_directory;
+                reply["auto_dump_enabled"] = _shared_config.auto_dump_enabled;
+                reply["total_triggers_fired"] = _total_triggers_fired;
+                reply["last_dump_path"] = _last_dump_path;
+                reply["last_trigger_frame"] = _last_trigger_metrics.frame_id;
+                reply["last_trigger_flagged_channels"] = _last_trigger_metrics.flagged_channels;
+                reply["last_trigger_mean_sk"] = _last_trigger_metrics.mean_sk;
+                reply["last_trigger_mean_r01"] = _last_trigger_metrics.mean_r01;
+
+                conn.send_json_reply(reply);
+            };
+            rest.register_get_callback("/transient_trigger/status", status_cb);
+
+            // 2. POST /transient_trigger/set_thresholds
+            auto set_thresholds_cb = [](connectionInstance& conn, nlohmann::json& j) {
+                try {
+                    std::lock_guard<std::mutex> lk(_global_mutex);
+                    if (j.contains("sk_threshold")) {
+                        _shared_config.sk_threshold = j["sk_threshold"];
+                    }
+                    if (j.contains("rfi_threshold")) {
+                        _shared_config.rfi_threshold = j["rfi_threshold"];
+                    }
+                    if (j.contains("min_flagged_channels")) {
+                        _shared_config.min_flagged_channels = j["min_flagged_channels"];
+                    }
+                    INFO_NON_OO("TransientTrigger: Thresholds updated: SK={:.3f}, RFI={:.3f}, MinCh={:d}",
+                                _shared_config.sk_threshold, _shared_config.rfi_threshold,
+                                _shared_config.min_flagged_channels);
+                    conn.send_text_reply("Transient trigger thresholds updated successfully\n");
+                } catch (const std::exception& e) {
+                    conn.send_error(e.what(), HTTP_RESPONSE::BAD_REQUEST);
+                }
+            };
+            rest.register_post_callback("/transient_trigger/set_thresholds", set_thresholds_cb);
+
+            // 3. POST /transient_trigger/manual_trigger
+            auto manual_trig_cb = [](connectionInstance& conn, nlohmann::json&) {
+                _manual_trigger_requested.store(true);
+                INFO_NON_OO("TransientTrigger: Manual trigger requested via REST");
+                conn.send_text_reply("Manual candidate dump trigger queued\n");
+            };
+            rest.register_post_callback("/transient_trigger/manual_trigger", manual_trig_cb);
+
+            // 4. POST /transient_trigger/enable
+            auto enable_cb = [](connectionInstance& conn, nlohmann::json& j) {
+                try {
+                    bool en = j.value("enabled", true);
+                    std::lock_guard<std::mutex> lk(_global_mutex);
+                    _shared_config.enabled = en;
+                    INFO_NON_OO("TransientTrigger: Monitoring {:s}", en ? "ENABLED" : "DISABLED");
+                    conn.send_text_reply(fmt::format("Transient trigger monitoring {:s}\n", en ? "enabled" : "disabled"));
+                } catch (const std::exception& e) {
+                    conn.send_error(e.what(), HTTP_RESPONSE::BAD_REQUEST);
+                }
+            };
+            rest.register_post_callback("/transient_trigger/enable", enable_cb);
+
+            _endpoints_registered = true;
+        }
+    }
+
+    allocate_device_buffers();
+}
+
+cudaTransientTriggerCommand::~cudaTransientTriggerCommand() {
+    free_device_buffers();
+}
+
+void cudaTransientTriggerCommand::allocate_device_buffers() {
+    // 1. Allocate GPU VRAM Circular Ring Buffer
+    const std::size_t total_ring_bytes = static_cast<std::size_t>(_ring_buffer_depth) * _frame_bytes;
+    CHECK_CUDA_ERROR_NON_OO(cudaMalloc(reinterpret_cast<void**>(&_d_ring_buffer), total_ring_bytes));
+
+    // 2. Allocate GPU Metrics Output Buffer
+    const std::size_t metrics_bytes = static_cast<std::size_t>(_num_local_freq) * sizeof(float2);
+    CHECK_CUDA_ERROR_NON_OO(cudaMalloc(reinterpret_cast<void**>(&_d_metrics), metrics_bytes));
+
+    // 3. Allocate Pinned Host Metrics Buffer
+    CHECK_CUDA_ERROR_NON_OO(cudaHostAlloc(
+        reinterpret_cast<void**>(&_h_metrics_pinned), metrics_bytes, cudaHostAllocDefault));
+
+    // 4. Allocate Pinned Host Dump Staging Buffer
+    const std::size_t max_dump_frames = static_cast<std::size_t>(_pre_trigger_frames + 1 + _post_trigger_frames);
+    const std::size_t total_dump_bytes = max_dump_frames * _frame_bytes;
+    CHECK_CUDA_ERROR_NON_OO(cudaHostAlloc(
+        reinterpret_cast<void**>(&_h_dump_pinned), total_dump_bytes, cudaHostAllocDefault));
+
+    // 5. Create Dedicated Non-Blocking CUDA Dump Stream
+    CHECK_CUDA_ERROR_NON_OO(cudaStreamCreateWithFlags(&_dump_stream, cudaStreamNonBlocking));
+
+    INFO_NON_OO("cudaTransientTriggerCommand: Allocated VRAM Ring Buffer ({:d} frames, {:.2f} MB), Dump Stream Ready",
+                _ring_buffer_depth, static_cast<double>(total_ring_bytes) / (1024.0 * 1024.0));
+}
+
+void cudaTransientTriggerCommand::free_device_buffers() {
+    if (_dump_stream) {
+        cudaStreamSynchronize(_dump_stream);
+        cudaStreamDestroy(_dump_stream);
+        _dump_stream = nullptr;
+    }
+    if (_d_ring_buffer) {
+        cudaFree(_d_ring_buffer);
+        _d_ring_buffer = nullptr;
+    }
+    if (_d_metrics) {
+        cudaFree(_d_metrics);
+        _d_metrics = nullptr;
+    }
+    if (_h_metrics_pinned) {
+        cudaFreeHost(_h_metrics_pinned);
+        _h_metrics_pinned = nullptr;
+    }
+    if (_h_dump_pinned) {
+        cudaFreeHost(_h_dump_pinned);
+        _h_dump_pinned = nullptr;
+    }
+}
+
+void cudaTransientTriggerCommand::dispatch_candidate_dump(
+    uint32_t trigger_frame, const TransientFrameMetrics& metrics) {
+
+    TransientTriggerConfig current_config = get_shared_config();
+    const uint32_t pre = current_config.pre_trigger_frames;
+    const uint32_t post = current_config.post_trigger_frames;
+
+    const uint32_t start_frame = (trigger_frame > pre) ? (trigger_frame - pre) : 0;
+    const uint32_t end_frame = trigger_frame + post;
+    const uint32_t num_frames_to_dump = end_frame - start_frame + 1;
+
+    DEBUG("TransientTrigger: Dispatching dump for candidate window frames [{:d}..{:d}] ({:d} frames)",
+          start_frame, end_frame, num_frames_to_dump);
+
+    // Asynchronously copy candidate frames from GPU ring buffer to pinned host staging buffer
+    for (uint32_t f_idx = 0; f_idx < num_frames_to_dump; ++f_idx) {
+        const uint32_t target_frame = start_frame + f_idx;
+        const uint32_t slot = target_frame % _ring_buffer_depth;
+
+        const float2* d_src = _d_ring_buffer + slot * _frame_elements;
+        float2* h_dst = _h_dump_pinned + f_idx * _frame_elements;
+
+        CHECK_CUDA_ERROR_NON_OO(cudaMemcpyAsync(
+            h_dst, d_src, _frame_bytes, cudaMemcpyDeviceToHost, _dump_stream));
+    }
+
+    // Launch background asynchronous task to write candidate file to disk once stream finishes
+    std::string dump_dir = current_config.dump_directory;
+    std::size_t total_bytes = static_cast<std::size_t>(num_frames_to_dump) * _frame_bytes;
+    cudaStream_t stream_to_sync = _dump_stream;
+    const float2* host_data = _h_dump_pinned;
+
+    std::thread([dump_dir, trigger_frame, start_frame, end_frame, num_frames_to_dump,
+                 total_bytes, stream_to_sync, host_data, metrics]() {
+        try {
+            // Wait for GPU -> Host D2H copy to complete on dump stream
+            CHECK_CUDA_ERROR_NON_OO(cudaStreamSynchronize(stream_to_sync));
+
+            std::filesystem::create_directories(dump_dir);
+
+            auto now = std::chrono::system_clock::now();
+            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now.time_since_epoch()).count();
+
+            std::string base_path = fmt::format("{:s}/candidate_frame_{:08d}_{:d}",
+                                                dump_dir, trigger_frame, now_ms);
+            std::string raw_path = base_path + ".raw";
+            std::string json_path = base_path + ".json";
+
+            // 1. Write baseband raw voltages
+            std::ofstream raw_file(raw_path, std::ios::binary);
+            if (raw_file.is_open()) {
+                raw_file.write(reinterpret_cast<const char*>(host_data), total_bytes);
+                raw_file.close();
+            }
+
+            // 2. Write metadata JSON
+            nlohmann::json meta_json;
+            meta_json["trigger_frame"] = trigger_frame;
+            meta_json["start_frame"] = start_frame;
+            meta_json["end_frame"] = end_frame;
+            meta_json["num_dump_frames"] = num_frames_to_dump;
+            meta_json["total_bytes"] = total_bytes;
+            meta_json["timestamp_epoch_ms"] = now_ms;
+            meta_json["flagged_channels"] = metrics.flagged_channels;
+            meta_json["mean_sk"] = metrics.mean_sk;
+            meta_json["mean_r01"] = metrics.mean_r01;
+
+            std::ofstream json_file(json_path);
+            if (json_file.is_open()) {
+                json_file << meta_json.dump(4);
+                json_file.close();
+            }
+
+            {
+                std::lock_guard<std::mutex> lk(_global_mutex);
+                _last_dump_path = raw_path;
+            }
+
+            INFO_NON_OO("TransientTrigger: Successfully saved candidate dump to {:s} ({:.2f} MB)",
+                        raw_path, static_cast<double>(total_bytes) / (1024.0 * 1024.0));
+        } catch (const std::exception& e) {
+            ERROR_NON_OO("TransientTrigger: Failed to write candidate dump: {:s}", e.what());
+        }
+    }).detach();
+}
+
+cudaEvent_t cudaTransientTriggerCommand::execute(
+    cudaPipelineState& /*pipestate*/, const std::vector<cudaEvent_t>&) {
+
+    pre_execute();
+
+    void* input_memory = device.get_gpu_memory_array(
+        _gpu_mem_cleaned_beams, gpu_frame_id, _gpu_buffer_depth, _frame_bytes);
+
+    if (!input_memory) {
+        return record_end_event();
+    }
+
+    // Forward metadata to output buffer if different
+    if (_gpu_mem_output != _gpu_mem_cleaned_beams) {
+        std::shared_ptr<metadataObject> meta = device.get_gpu_memory_array_metadata(
+            _gpu_mem_cleaned_beams, gpu_frame_id);
+        if (meta) {
+            device.claim_gpu_memory_array_metadata(_gpu_mem_output, gpu_frame_id, meta);
+        }
+    }
+
+    record_start_event();
+    cudaStream_t stream = device.getStream(cuda_stream_id);
+
+    // Forward cleaned beams to output memory if required
+    if (_gpu_mem_output != _gpu_mem_cleaned_beams) {
+        void* output_memory = device.get_gpu_memory_array(
+            _gpu_mem_output, gpu_frame_id, _gpu_buffer_depth, _frame_bytes);
+        if (output_memory) {
+            CHECK_CUDA_ERROR_NON_OO(cudaMemcpyAsync(
+                output_memory, input_memory, _frame_bytes,
+                cudaMemcpyDeviceToDevice, stream));
+        }
+    }
+
+    // Ingest current frame into VRAM circular ring buffer
+    const uint32_t current_slot = _frames_processed % _ring_buffer_depth;
+    float2* ring_dest = _d_ring_buffer + current_slot * _frame_elements;
+    CHECK_CUDA_ERROR_NON_OO(cudaMemcpyAsync(
+        ring_dest, input_memory, _frame_bytes,
+        cudaMemcpyDeviceToDevice, stream));
+
+    TransientTriggerConfig current_config = get_shared_config();
+
+    if (current_config.enabled) {
+        // 1. Launch Spectral Kurtosis and Inter-Beam Cross-Correlation Reduction Kernel
+        launch_transient_detection_metrics(
+            reinterpret_cast<const float2*>(input_memory),
+            _d_metrics,
+            static_cast<std::size_t>(_samples_per_data_set),
+            static_cast<std::size_t>(_num_local_freq),
+            static_cast<std::size_t>(_max_beams),
+            static_cast<std::size_t>(_max_beams),
+            stream);
+
+        // 2. Asynchronously copy metrics (2.68 KB) to pinned host buffer
+        const std::size_t metrics_bytes = static_cast<std::size_t>(_num_local_freq) * sizeof(float2);
+        CHECK_CUDA_ERROR_NON_OO(cudaMemcpyAsync(
+            _h_metrics_pinned, _d_metrics, metrics_bytes,
+            cudaMemcpyDeviceToHost, stream));
+
+        // Stream synchronization for lightweight metric evaluation
+        CHECK_CUDA_ERROR_NON_OO(cudaStreamSynchronize(stream));
+
+        // 3. Evaluate combined decision logic on host
+        auto now_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+
+        TransientFrameMetrics frame_metrics = evaluate_transient_decision(
+            _h_metrics_pinned,
+            static_cast<std::size_t>(_num_local_freq),
+            current_config,
+            _frames_processed,
+            now_ns);
+
+        // Check manual trigger request
+        if (_manual_trigger_requested.exchange(false)) {
+            frame_metrics.trigger_fired = true;
+            INFO_NON_OO("TransientTrigger: Manual trigger executed on frame {:d}", _frames_processed);
+        }
+
+        // 4. Decision handling
+        if (frame_metrics.trigger_fired) {
+            {
+                std::lock_guard<std::mutex> lk(_global_mutex);
+                _total_triggers_fired++;
+                _last_trigger_metrics = frame_metrics;
+            }
+
+            INFO_NON_OO("TRANSIENT DETECTED! Frame {:d}: Flagged Channels={:d}/{:d}, Mean SK={:.3f}, Mean R01={:.3f}",
+                        _frames_processed, frame_metrics.flagged_channels, _num_local_freq,
+                        frame_metrics.mean_sk, frame_metrics.mean_r01);
+
+            if (current_config.auto_dump_enabled && !_dump_pending) {
+                _dump_pending = true;
+                _dump_trigger_frame = _frames_processed;
+                _dump_target_frame = _frames_processed + current_config.post_trigger_frames;
+                _dump_metrics = frame_metrics;
+            }
+        }
+
+        // 5. Complete candidate dump once post-trigger frames arrive in circular ring buffer
+        if (_dump_pending && _frames_processed >= _dump_target_frame) {
+            dispatch_candidate_dump(_dump_trigger_frame, _dump_metrics);
+            _dump_pending = false;
+        }
+    }
+
+    _frames_processed++;
+    return record_end_event();
+}
+
+} // namespace kotekan

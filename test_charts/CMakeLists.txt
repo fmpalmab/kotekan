@@ -5,6 +5,8 @@ if(CUDAToolkit_FOUND)
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib/cuda/cudaBeamTrackerV5.cu
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib/cuda/cudaDirectBeamTracker.cu
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib/cuda/cudaAntennaMask.cu
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/cuda/cudaBiSLC.cu
+        ${CMAKE_CURRENT_SOURCE_DIR}/../lib/cuda/cudaTransientTrigger.cu
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib/core/kotekanLogging.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../lib/core/errors.c)
 
@@ -76,4 +78,25 @@ if(CUDAToolkit_FOUND)
         ${COMMON_TEST_SRCS})
     target_link_libraries(benchmark_pipeline_masking_direct PRIVATE CUDA::cudart Threads::Threads)
     target_include_directories(benchmark_pipeline_masking_direct PRIVATE ${COMMON_INCLUDE_DIRS})
+
+    # 9. BiSLC (Joint Matrix Unmixing) Coherent Sidelobe Cancellation Suite
+    add_executable(test_bislc_suite
+        test_bislc_suite.cpp
+        ${COMMON_TEST_SRCS})
+    target_link_libraries(test_bislc_suite PRIVATE CUDA::cudart Threads::Threads)
+    target_include_directories(test_bislc_suite PRIVATE ${COMMON_INCLUDE_DIRS})
+
+    # 10. Sub-frame Phase Interpolation Suite
+    add_executable(test_phase_interpolation_suite
+        test_phase_interpolation_suite.cpp
+        ${COMMON_TEST_SRCS})
+    target_link_libraries(test_phase_interpolation_suite PRIVATE CUDA::cudart Threads::Threads)
+    target_include_directories(test_phase_interpolation_suite PRIVATE ${COMMON_INCLUDE_DIRS})
+
+    # 11. Transient Trigger Comprehensive Test Suite (SK + Cross-Correlation + Ring Buffer Dump)
+    add_executable(test_transient_trigger_suite
+        test_transient_trigger_suite.cpp
+        ${COMMON_TEST_SRCS})
+    target_link_libraries(test_transient_trigger_suite PRIVATE CUDA::cudart Threads::Threads)
+    target_include_directories(test_transient_trigger_suite PRIVATE ${COMMON_INCLUDE_DIRS})
 endif()

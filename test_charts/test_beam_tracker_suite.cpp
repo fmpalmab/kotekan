@@ -364,6 +364,7 @@ TestResult test_direct_beam_tracker_accuracy(
     }
 
     // Generate weights on CPU
+    const float norm = 1.0f / std::sqrt(static_cast<float>(n_ant));
     std::vector<float2> h_weights(max_beams * n_freq * n_ant);
     for (std::size_t b = 0; b < max_beams; ++b) {
         for (std::size_t f = 0; f < n_freq; ++f) {
@@ -372,8 +373,8 @@ TestResult test_direct_beam_tracker_accuracy(
                                        static_cast<double>(h_positions[a].y) * h_dirs[b].y;
                 const double phase = h_wavenumbers[f] * delay_m;
                 h_weights[(b * n_freq + f) * n_ant + a] = make_float2(
-                    static_cast<float>(std::cos(phase)),
-                    static_cast<float>(std::sin(phase)));
+                    static_cast<float>(std::cos(phase) * norm),
+                    static_cast<float>(std::sin(phase) * norm));
             }
         }
     }

@@ -161,7 +161,7 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
             rest.register_get_callback("/antenna_mask/status", status_cb);
 
             // 2. POST /antenna_mask/mask
-            auto mask_cb = [](connectionInstance& conn, nlohmann::json& j) {
+            auto mask_cb = [num_elements](connectionInstance& conn, nlohmann::json& j) {
                 try {
                     if (!j.contains("antenna_id")) {
                         conn.send_error("Missing antenna_id", HTTP_RESPONSE::BAD_REQUEST);
@@ -178,7 +178,11 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
                     _shared_metrics[ant_id].status = AntennaHealthStatus::MANUAL_MASK;
                     _shared_metrics[ant_id].consecutive_healthy = 0;
                     _mask_dirty = true;
-                    cudaDirectBeamTrackerCommand::set_shared_antenna_mask(_shared_mask);
+                    int n_active = 0;
+                    for (int i = 0; i < num_elements; ++i) {
+                        if (_shared_mask[i] != 0) n_active++;
+                    }
+                    cudaDirectBeamTrackerCommand::set_shared_antenna_mask(_shared_mask, n_active);
                     INFO_NON_OO("AntennaMask: Antenna {:d} MANUAL MASK applied", ant_id);
                     conn.send_text_reply(fmt::format("Antenna {:d} masked successfully\n", ant_id));
                 } catch (const std::exception& e) {
@@ -188,7 +192,7 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
             rest.register_post_callback("/antenna_mask/mask", mask_cb);
 
             // 3. POST /antenna_mask/unmask
-            auto unmask_cb = [](connectionInstance& conn, nlohmann::json& j) {
+            auto unmask_cb = [num_elements](connectionInstance& conn, nlohmann::json& j) {
                 try {
                     if (!j.contains("antenna_id")) {
                         conn.send_error("Missing antenna_id", HTTP_RESPONSE::BAD_REQUEST);
@@ -205,7 +209,11 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
                     _shared_metrics[ant_id].status = AntennaHealthStatus::HEALTHY;
                     _shared_metrics[ant_id].consecutive_healthy = _shared_config.revival_frames;
                     _mask_dirty = true;
-                    cudaDirectBeamTrackerCommand::set_shared_antenna_mask(_shared_mask);
+                    int n_active = 0;
+                    for (int i = 0; i < num_elements; ++i) {
+                        if (_shared_mask[i] != 0) n_active++;
+                    }
+                    cudaDirectBeamTrackerCommand::set_shared_antenna_mask(_shared_mask, n_active);
                     INFO_NON_OO("AntennaMask: Antenna {:d} UNMASK applied", ant_id);
                     conn.send_text_reply(fmt::format("Antenna {:d} unmasked successfully\n", ant_id));
                 } catch (const std::exception& e) {
@@ -215,7 +223,7 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
             rest.register_post_callback("/antenna_mask/unmask", unmask_cb);
 
             // 4. POST /antenna_mask/reset
-            auto reset_cb = [](connectionInstance& conn, nlohmann::json& /*j*/) {
+            auto reset_cb = [num_elements](connectionInstance& conn, nlohmann::json& /*j*/) {
                 std::lock_guard<std::mutex> lk(_global_mutex);
                 _shared_config.manual_mask.fill(1);
                 _shared_mask.fill(1);
@@ -224,7 +232,11 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
                     _shared_metrics[i].consecutive_healthy = _shared_config.revival_frames;
                 }
                 _mask_dirty = true;
-                cudaDirectBeamTrackerCommand::set_shared_antenna_mask(_shared_mask);
+                int n_active = 0;
+                for (int i = 0; i < num_elements; ++i) {
+                    if (_shared_mask[i] != 0) n_active++;
+                }
+                cudaDirectBeamTrackerCommand::set_shared_antenna_mask(_shared_mask, n_active);
                 INFO_NON_OO("AntennaMask: Reset all antenna masks to ACTIVE");
                 conn.send_text_reply("All antenna masks reset to active\n");
             };
@@ -444,7 +456,11 @@ cudaEvent_t cudaAntennaMaskCommand::execute(
         }
 
         if (mask_changed || _mask_dirty) {
-            cudaDirectBeamTrackerCommand::set_shared_antenna_mask(_shared_mask);
+            int n_active = 0;
+            for (int i = 0; i < _num_elements; ++i) {
+                if (_shared_mask[i] != 0) n_active++;
+            }
+            cudaDirectBeamTrackerCommand::set_shared_antenna_mask(_shared_mask, n_active);
             _mask_dirty = false;
         }
     } else {
