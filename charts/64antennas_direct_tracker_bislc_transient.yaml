@@ -237,6 +237,9 @@ gpu:
       min_flagged_channels: 8
       dump_directory: "/data/tracker/tracker_64ant/transient_candidates/stream_0"
       auto_dump_enabled: true
+      cooldown_frames: 200              # Refractory holdoff: ~10.2 seconds between dumps
+      min_free_disk_gb: 20              # Hard safety floor: abort if free space < 20 GB
+      max_auto_dumps: 10                # Session ceiling: max 10 auto-dumps before pausing
       enabled: true
 
     - name: cudaSyncOutput
@@ -324,6 +327,9 @@ gpu:
       min_flagged_channels: 8
       dump_directory: "/data/tracker/tracker_64ant/transient_candidates/stream_1"
       auto_dump_enabled: true
+      cooldown_frames: 200              # Refractory holdoff: ~10.2 seconds between dumps
+      min_free_disk_gb: 20              # Hard safety floor: abort if free space < 20 GB
+      max_auto_dumps: 10                # Session ceiling: max 10 auto-dumps before pausing
       enabled: true
 
     - name: cudaSyncOutput

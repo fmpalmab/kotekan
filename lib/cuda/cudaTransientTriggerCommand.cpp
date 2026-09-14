@@ -36,6 +36,7 @@ TransientTriggerConfig cudaTransientTriggerCommand::_shared_config;
 bool cudaTransientTriggerCommand::_endpoints_registered = false;
 std::atomic<uint32_t> cudaTransientTriggerCommand::_manual_trigger_count{0};
 uint32_t cudaTransientTriggerCommand::_total_triggers_fired = 0;
+std::atomic<uint32_t> cudaTransientTriggerCommand::_auto_dumps_written{0};
 TransientFrameMetrics cudaTransientTriggerCommand::_last_trigger_metrics;
 std::string cudaTransientTriggerCommand::_last_dump_path = "none";
 
@@ -185,6 +186,19 @@ void cudaTransientTriggerState::dispatch_candidate_dump(
 
             std::filesystem::create_directories(dump_dir);
 
+            // Layer 2 Guard Rail: Hard disk space safety circuit breaker
+            std::error_code ec;
+            auto space_info = std::filesystem::space(dump_dir, ec);
+            if (!ec) {
+                uint64_t free_gb = space_info.available / (1024ULL * 1024ULL * 1024ULL);
+                uint32_t min_free = cudaTransientTriggerCommand::get_shared_config().min_free_disk_gb;
+                if (free_gb < min_free) {
+                    ERROR_NON_OO("TransientTrigger: DISK SAFETY TRIP! Free disk space ({:d} GB) < min_free_disk_gb ({:d} GB). Dump aborted to protect filesystem!",
+                                 free_gb, min_free);
+                    return;
+                }
+            }
+
             auto now = std::chrono::system_clock::now();
             auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now.time_since_epoch()).count();
@@ -280,6 +294,12 @@ cudaTransientTriggerCommand::cudaTransientTriggerCommand(
             unique_name, "dump_directory", "./transient_dumps");
         _shared_config.auto_dump_enabled = config.get_default<bool>(
             unique_name, "auto_dump_enabled", true);
+        _shared_config.cooldown_frames = static_cast<uint32_t>(config.get_default<int>(
+            unique_name, "cooldown_frames", 200));
+        _shared_config.min_free_disk_gb = static_cast<uint32_t>(config.get_default<int>(
+            unique_name, "min_free_disk_gb", 20));
+        _shared_config.max_auto_dumps = static_cast<uint32_t>(config.get_default<int>(
+            unique_name, "max_auto_dumps", 20));
 
         if (!_endpoints_registered) {
             auto& rest = restServer::instance();
@@ -298,6 +318,10 @@ cudaTransientTriggerCommand::cudaTransientTriggerCommand(
                 reply["post_trigger_frames"] = _shared_config.post_trigger_frames;
                 reply["dump_directory"] = _shared_config.dump_directory;
                 reply["auto_dump_enabled"] = _shared_config.auto_dump_enabled;
+                reply["cooldown_frames"] = _shared_config.cooldown_frames;
+                reply["min_free_disk_gb"] = _shared_config.min_free_disk_gb;
+                reply["max_auto_dumps"] = _shared_config.max_auto_dumps;
+                reply["auto_dumps_written"] = _auto_dumps_written.load();
                 reply["total_triggers_fired"] = _total_triggers_fired;
                 reply["last_dump_path"] = _last_dump_path;
                 reply["last_trigger_frame"] = _last_trigger_metrics.frame_id;
@@ -325,9 +349,26 @@ cudaTransientTriggerCommand::cudaTransientTriggerCommand(
                     if (j.contains("min_flagged_channels")) {
                         _shared_config.min_flagged_channels = j["min_flagged_channels"];
                     }
-                    INFO_NON_OO("TransientTrigger: Thresholds updated: SK={:.3f}, RFI={:.3f}, MinCh={:d}",
+                    if (j.contains("cooldown_frames")) {
+                        _shared_config.cooldown_frames = j["cooldown_frames"];
+                    }
+                    if (j.contains("min_free_disk_gb")) {
+                        _shared_config.min_free_disk_gb = j["min_free_disk_gb"];
+                    }
+                    if (j.contains("max_auto_dumps")) {
+                        _shared_config.max_auto_dumps = j["max_auto_dumps"];
+                    }
+                    if (j.contains("auto_dump_enabled")) {
+                        _shared_config.auto_dump_enabled = j["auto_dump_enabled"];
+                    }
+                    if (j.contains("reset_quota") && j["reset_quota"].get<bool>()) {
+                        _auto_dumps_written.store(0);
+                        INFO_NON_OO("TransientTrigger: Auto-dump quota reset to 0");
+                    }
+                    INFO_NON_OO("TransientTrigger: Thresholds updated: SK={:.3f}, RFI={:.3f}, MinCh={:d}, Cooldown={:d}, MinFreeDisk={:d}GB, MaxDumps={:d}",
                                 _shared_config.sk_threshold, _shared_config.rfi_threshold,
-                                _shared_config.min_flagged_channels);
+                                _shared_config.min_flagged_channels, _shared_config.cooldown_frames,
+                                _shared_config.min_free_disk_gb, _shared_config.max_auto_dumps);
                     conn.send_text_reply("Transient trigger thresholds updated successfully\n");
                 } catch (const std::exception& e) {
                     conn.send_error(e.what(), HTTP_RESPONSE::BAD_REQUEST);
@@ -460,12 +501,19 @@ cudaEvent_t cudaTransientTriggerCommand::execute(
             now_ns);
 
         // Check manual trigger request
+        bool is_manual_trigger = false;
         uint32_t current_manual_count = _manual_trigger_count.load();
         if (state->last_manual_trigger_id != current_manual_count) {
             state->last_manual_trigger_id = current_manual_count;
             frame_metrics.trigger_fired = true;
+            is_manual_trigger = true;
             INFO_NON_OO("TransientTrigger: Manual trigger executed on frame {:d} [{:s}]",
                         state->frames_processed, state->unique_name.c_str());
+        }
+
+        // Layer 1 Guard Rail: Cooldown / Refractory holdoff for automated triggers
+        if (!is_manual_trigger && state->frames_processed < state->cooldown_until_frame) {
+            frame_metrics.trigger_fired = false;
         }
 
         // 4. Decision handling
@@ -481,11 +529,21 @@ cudaEvent_t cudaTransientTriggerCommand::execute(
                         frame_metrics.flagged_channels, state->num_local_freq,
                         frame_metrics.mean_sk, frame_metrics.mean_r01);
 
-            if (current_config.auto_dump_enabled && !state->dump_pending) {
+            // Layer 3 Guard Rail: Session auto-dump quota ceiling
+            if (!is_manual_trigger && _auto_dumps_written.load() >= current_config.max_auto_dumps) {
+                WARN_NON_OO("TransientTrigger: Auto-dump quota reached ({:d}/{:d}) on [{:s}]. Dump skipped! Reset quota or increase max_auto_dumps via REST.",
+                            _auto_dumps_written.load(), current_config.max_auto_dumps, state->unique_name.c_str());
+            } else if (current_config.auto_dump_enabled && !state->dump_pending) {
                 state->dump_pending = true;
                 state->dump_trigger_frame = state->frames_processed;
                 state->dump_target_frame = state->frames_processed + current_config.post_trigger_frames;
                 state->dump_metrics = frame_metrics;
+
+                // Enforce refractory cooldown starting after trigger window completes
+                state->cooldown_until_frame = state->dump_target_frame + current_config.cooldown_frames;
+                if (!is_manual_trigger) {
+                    _auto_dumps_written++;
+                }
             }
         }
 

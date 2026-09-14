@@ -26,6 +26,9 @@ struct TransientTriggerConfig {
     uint32_t post_trigger_frames = 4;         ///< Trailing frames after trigger to extract
     std::string dump_directory = "./transient_dumps"; ///< Output directory for candidate disk dumps
     bool auto_dump_enabled = true;            ///< Automatically dump candidate frames on trigger fire
+    uint32_t cooldown_frames = 200;           ///< Refractory cooldown period in frames (~10.2s) between dumps
+    uint32_t min_free_disk_gb = 20;           ///< Minimum free disk space in GB required to write dumps
+    uint32_t max_auto_dumps = 20;             ///< Maximum automated candidate dumps per session
 };
 
 /**

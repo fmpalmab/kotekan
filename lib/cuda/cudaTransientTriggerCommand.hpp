@@ -68,6 +68,8 @@ public:
     uint32_t dump_target_frame = 0;
     TransientFrameMetrics dump_metrics;
     uint32_t last_manual_trigger_id = 0;
+    uint32_t cooldown_until_frame = 0;
+    uint32_t auto_dumps_written = 0;
 };
 
 /**
@@ -112,6 +114,7 @@ private:
     static bool _endpoints_registered;
     static std::atomic<uint32_t> _manual_trigger_count;
     static uint32_t _total_triggers_fired;
+    static std::atomic<uint32_t> _auto_dumps_written;
     static TransientFrameMetrics _last_trigger_metrics;
     static std::string _last_dump_path;
 };
