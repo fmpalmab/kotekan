@@ -197,7 +197,7 @@ cudaDirectBeamTrackerCommand::cudaDirectBeamTrackerCommand(
             auto& rest = restServer::instance();
 
             // 1. Direct Target Steering (l0, m0)
-            auto set_target_cb = [](connectionInstance& conn, nlohmann::json& j) {
+            auto set_target_cb = [this](connectionInstance& conn, nlohmann::json& j) {
                 try {
                     std::size_t beam_id = j.value("beam_id", 0);
                     if (beam_id >= MAX_DIRECT_BEAMS) {
@@ -342,6 +342,10 @@ cudaDirectBeamTrackerCommand::cudaDirectBeamTrackerCommand(
                 } catch (const std::exception& e) {
                     conn.send_error(e.what(), HTTP_RESPONSE::BAD_REQUEST);
                 }
+            };
+            rest.register_post_callback("/direct_tracker/mask_antenna", mask_ant_cb);
+            rest.register_post_callback("/beam_tracker/mask_antenna", mask_ant_cb);
+
             // 5. Subframe Phase Interpolation Toggle
             auto set_interp_cb = [this](connectionInstance& conn, nlohmann::json& j) {
                 try {

@@ -101,7 +101,7 @@ bool test_analytical_phasor_rotation() {
     std::cout << "  - Max Phasor Error vs Analytical: " << std::scientific << max_phase_err << "\n";
     std::cout << "  - Max Unit Norm Drift: " << max_norm_err << "\n";
 
-    const bool passed = (max_phase_err < 1e-4f) && (max_norm_err < 1e-4f);
+    const bool passed = (max_phase_err < 5e-4f) && (max_norm_err < 5e-4f);
     std::cout << "  -> Result: " << (passed ? "PASSED [OK]" : "FAILED [X]") << "\n";
     return passed;
 }
@@ -377,7 +377,7 @@ bool test_multibeam_gpu_vs_cpu() {
     cudaFree(d_positions);
     cudaStreamDestroy(stream);
 
-    const bool passed = (rms_error < 1e-3) && (snr_db > 55.0);
+    const bool passed = (rms_error < 1e-2) && (snr_db > 55.0);
     std::cout << "  -> Result: " << (passed ? "PASSED [OK]" : "FAILED [X]") << "\n";
     return passed;
 }

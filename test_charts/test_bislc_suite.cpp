@@ -328,7 +328,9 @@ bool test_gpu_kernel_benchmark() {
 
     // Populate synthetic input data and matrices
     for (std::size_t i = 0; i < h_formed.size(); ++i) {
-        h_formed[i] = make_float2(static_cast<float>((i % 17) - 8), static_cast<float>((i % 13) - 6));
+        h_formed[i] = make_float2(
+            static_cast<float>(static_cast<int>(i % 17) - 8),
+            static_cast<float>(static_cast<int>(i % 13) - 6));
     }
     for (std::size_t f = 0; f < n_freq; ++f) {
         h_matrices[f * 4 + 0] = make_float2(1.02f, 0.01f);

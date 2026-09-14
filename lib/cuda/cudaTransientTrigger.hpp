@@ -94,6 +94,7 @@ inline TransientFrameMetrics evaluate_transient_decision(
     uint32_t flagged = 0;
     double sum_sk = 0.0;
     double sum_r01 = 0.0;
+    double sum_flagged_r01 = 0.0;
 
     for (std::size_t f = 0; f < n_freq; ++f) {
         const float sk = h_metrics[f].x;
@@ -104,12 +105,14 @@ inline TransientFrameMetrics evaluate_transient_decision(
 
         if (std::abs(sk - 1.0f) > config.sk_threshold) {
             flagged++;
+            sum_flagged_r01 += static_cast<double>(r01);
         }
     }
 
     out.flagged_channels = flagged;
     out.mean_sk = static_cast<float>(sum_sk / static_cast<double>(n_freq));
-    out.mean_r01 = static_cast<float>(sum_r01 / static_cast<double>(n_freq));
+    out.mean_r01 = static_cast<float>(flagged > 0 ? (sum_flagged_r01 / static_cast<double>(flagged))
+                                                  : (sum_r01 / static_cast<double>(n_freq)));
 
     const bool sk_condition = (flagged >= config.min_flagged_channels);
     const bool rfi_condition = (out.mean_r01 < config.rfi_threshold);
