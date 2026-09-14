@@ -1,6 +1,7 @@
 #ifndef CUDA_TRANSIENT_TRIGGER_HPP
 #define CUDA_TRANSIENT_TRIGGER_HPP
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -18,10 +19,10 @@ namespace kotekan {
 struct TransientTriggerConfig {
     bool enabled = true;
     float sk_threshold = 0.08f;               ///< Threshold |SK(f) - 1.0| > sk_threshold to flag channel
-    float rfi_threshold = 0.30f;              ///< Veto threshold: mean R_01 < rfi_threshold to accept as celestial
-    uint32_t min_flagged_channels = 8;        ///< Minimum number of flagged channels required to trigger
-    uint32_t ring_buffer_depth = 32;          ///< Depth K of GPU VRAM circular buffer (number of frames)
-    uint32_t pre_trigger_frames = 4;          ///< History frames prior to trigger to extract
+    float rfi_threshold = 0.30f;              ///< Threshold mean(R01) < rfi_threshold to reject common RFI
+    uint32_t min_flagged_channels = 8;        ///< Minimum flagged channels to trigger candidate event
+    uint32_t ring_buffer_depth = 32;          ///< Circular ring buffer depth in frames
+    uint32_t pre_trigger_frames = 4;          ///< Leading frames prior to trigger to extract
     uint32_t post_trigger_frames = 4;         ///< Trailing frames after trigger to extract
     std::string dump_directory = "./transient_dumps"; ///< Output directory for candidate disk dumps
     bool auto_dump_enabled = true;            ///< Automatically dump candidate frames on trigger fire
@@ -36,6 +37,9 @@ struct TransientFrameMetrics {
     uint64_t timestamp_ns = 0;
     uint32_t flagged_channels = 0;
     float mean_sk = 1.0f;
+    float min_sk = 1.0f;
+    float max_sk = 1.0f;
+    float median_sk = 1.0f;
     float mean_r01 = 0.0f;
     bool trigger_fired = false;
 };
@@ -96,9 +100,17 @@ inline TransientFrameMetrics evaluate_transient_decision(
     double sum_r01 = 0.0;
     double sum_flagged_r01 = 0.0;
 
+    std::vector<float> sk_values(n_freq);
+    float min_sk = 1e9f;
+    float max_sk = -1e9f;
+
     for (std::size_t f = 0; f < n_freq; ++f) {
         const float sk = h_metrics[f].x;
         const float r01 = h_metrics[f].y;
+
+        sk_values[f] = sk;
+        if (sk < min_sk) min_sk = sk;
+        if (sk > max_sk) max_sk = sk;
 
         sum_sk += static_cast<double>(sk);
         sum_r01 += static_cast<double>(r01);
@@ -109,8 +121,14 @@ inline TransientFrameMetrics evaluate_transient_decision(
         }
     }
 
+    std::size_t mid = n_freq / 2;
+    std::nth_element(sk_values.begin(), sk_values.begin() + mid, sk_values.end());
+
     out.flagged_channels = flagged;
     out.mean_sk = static_cast<float>(sum_sk / static_cast<double>(n_freq));
+    out.min_sk = min_sk;
+    out.max_sk = max_sk;
+    out.median_sk = sk_values[mid];
     out.mean_r01 = static_cast<float>(flagged > 0 ? (sum_flagged_r01 / static_cast<double>(flagged))
                                                   : (sum_r01 / static_cast<double>(n_freq)));
 

@@ -74,6 +74,8 @@ cudaTransientTriggerState::cudaTransientTriggerState(
         unique_name, "pre_trigger_frames", 4));
     post_trigger_frames = static_cast<uint32_t>(config.get_default<int>(
         unique_name, "post_trigger_frames", 4));
+    dump_directory = config.get_default<std::string>(
+        unique_name, "dump_directory", "./transient_dumps");
 
     frame_elements = static_cast<std::size_t>(samples_per_data_set) *
                      static_cast<std::size_t>(num_local_freq) *
@@ -168,7 +170,7 @@ void cudaTransientTriggerState::dispatch_candidate_dump(
             h_dst, d_src, frame_bytes, cudaMemcpyDeviceToHost, dump_stream));
     }
 
-    std::string dump_dir = current_config.dump_directory;
+    std::string dump_dir = !this->dump_directory.empty() ? this->dump_directory : current_config.dump_directory;
     std::size_t total_bytes = static_cast<std::size_t>(num_frames_to_dump) * frame_bytes;
     cudaStream_t stream_to_sync = dump_stream;
     const float2* host_data = h_dump_pinned;
@@ -210,6 +212,9 @@ void cudaTransientTriggerState::dispatch_candidate_dump(
             meta_json["timestamp_epoch_ms"] = now_ms;
             meta_json["flagged_channels"] = metrics.flagged_channels;
             meta_json["mean_sk"] = metrics.mean_sk;
+            meta_json["median_sk"] = metrics.median_sk;
+            meta_json["min_sk"] = metrics.min_sk;
+            meta_json["max_sk"] = metrics.max_sk;
             meta_json["mean_r01"] = metrics.mean_r01;
 
             std::ofstream json_file(json_path);
@@ -298,6 +303,9 @@ cudaTransientTriggerCommand::cudaTransientTriggerCommand(
                 reply["last_trigger_frame"] = _last_trigger_metrics.frame_id;
                 reply["last_trigger_flagged_channels"] = _last_trigger_metrics.flagged_channels;
                 reply["last_trigger_mean_sk"] = _last_trigger_metrics.mean_sk;
+                reply["last_trigger_median_sk"] = _last_trigger_metrics.median_sk;
+                reply["last_trigger_min_sk"] = _last_trigger_metrics.min_sk;
+                reply["last_trigger_max_sk"] = _last_trigger_metrics.max_sk;
                 reply["last_trigger_mean_r01"] = _last_trigger_metrics.mean_r01;
 
                 conn.send_json_reply(reply);
@@ -327,7 +335,7 @@ cudaTransientTriggerCommand::cudaTransientTriggerCommand(
             };
             rest.register_post_callback("/transient_trigger/set_thresholds", set_thresholds_cb);
 
-            // 3. POST /transient_trigger/manual_trigger
+            // 3. POST & GET /transient_trigger/manual_trigger
             auto manual_trig_cb = [](connectionInstance& conn, nlohmann::json&) {
                 _manual_trigger_count++;
                 INFO_NON_OO("TransientTrigger: Manual trigger requested via REST (count={:d})",
@@ -335,6 +343,13 @@ cudaTransientTriggerCommand::cudaTransientTriggerCommand(
                 conn.send_text_reply("Manual candidate dump trigger queued\n");
             };
             rest.register_post_callback("/transient_trigger/manual_trigger", manual_trig_cb);
+            auto manual_trig_get_cb = [](connectionInstance& conn) {
+                _manual_trigger_count++;
+                INFO_NON_OO("TransientTrigger: Manual trigger requested via REST GET (count={:d})",
+                            _manual_trigger_count.load());
+                conn.send_text_reply("Manual candidate dump trigger queued\n");
+            };
+            rest.register_get_callback("/transient_trigger/manual_trigger", manual_trig_get_cb);
 
             // 4. POST /transient_trigger/enable
             auto enable_cb = [](connectionInstance& conn, nlohmann::json& j) {

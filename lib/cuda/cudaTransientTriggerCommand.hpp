@@ -36,6 +36,7 @@ public:
 
     cudaDeviceInterface& device;
     std::string unique_name;
+    std::string dump_directory;
 
     int32_t num_local_freq = 0;
     int32_t samples_per_data_set = 0;
