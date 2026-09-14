@@ -160,8 +160,12 @@ cudaBiSLCCommand::cudaBiSLCCommand(
     set_command_type(gpuCommandType::KERNEL);
     set_name("cudaBiSLCCommand");
 
-    gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_formed_beams, true, false, true));
-    gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_cleaned_beams, false, true, true));
+    if (_gpu_mem_cleaned_beams == _gpu_mem_formed_beams) {
+        gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_formed_beams, true, true, true));
+    } else {
+        gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_formed_beams, true, false, true));
+        gpu_buffers_used.push_back(std::make_tuple(_gpu_mem_cleaned_beams, false, true, true));
+    }
 
     allocate_device_buffers();
 }
@@ -257,17 +261,21 @@ cudaEvent_t cudaBiSLCCommand::execute(
 
     void* input_memory = device.get_gpu_memory_array(_gpu_mem_formed_beams, gpu_frame_id,
                                                      _gpu_buffer_depth, buffer_bytes);
-    void* output_memory = device.get_gpu_memory_array(_gpu_mem_cleaned_beams, gpu_frame_id,
-                                                      _gpu_buffer_depth, buffer_bytes);
+    void* output_memory = (_gpu_mem_cleaned_beams == _gpu_mem_formed_beams)
+                              ? input_memory
+                              : device.get_gpu_memory_array(_gpu_mem_cleaned_beams, gpu_frame_id,
+                                                             _gpu_buffer_depth, buffer_bytes);
 
     if (!input_memory || !output_memory) {
         return record_end_event();
     }
 
-    // Forward metadata to output buffer
-    std::shared_ptr<metadataObject> meta = device.get_gpu_memory_array_metadata(_gpu_mem_formed_beams, gpu_frame_id);
-    if (meta) {
-        device.claim_gpu_memory_array_metadata(_gpu_mem_cleaned_beams, gpu_frame_id, meta);
+    // Forward metadata to output buffer if separate
+    if (_gpu_mem_cleaned_beams != _gpu_mem_formed_beams) {
+        std::shared_ptr<metadataObject> meta = device.get_gpu_memory_array_metadata(_gpu_mem_formed_beams, gpu_frame_id);
+        if (meta) {
+            device.claim_gpu_memory_array_metadata(_gpu_mem_cleaned_beams, gpu_frame_id, meta);
+        }
     }
 
     record_start_event();
@@ -275,9 +283,11 @@ cudaEvent_t cudaBiSLCCommand::execute(
 
     // Bypass mode: if disabled or only 1 active beam, pass formed beams straight through
     if (!current_config.enabled || current_config.num_active_beams <= 1) {
-        CHECK_CUDA_ERROR_NON_OO(cudaMemcpyAsync(
-            output_memory, input_memory, buffer_bytes,
-            cudaMemcpyDeviceToDevice, stream));
+        if (output_memory != input_memory) {
+            CHECK_CUDA_ERROR_NON_OO(cudaMemcpyAsync(
+                output_memory, input_memory, buffer_bytes,
+                cudaMemcpyDeviceToDevice, stream));
+        }
         return record_end_event();
     }
 

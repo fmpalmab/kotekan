@@ -34,14 +34,13 @@ capture_n_frames: 168750          # Continuous streaming duration (~2.4 hours)
 
 # Memory & Buffer Management
 buffer_depth: 20                  # Host RAM frame queue depth (~6.6 GB total queue per NIC)
-gpu_buffer_depth: 3               # GPU VRAM frame queue depth (~1.0 GB VRAM per GPU stream)
+gpu_buffer_depth: 2               # GPU VRAM frame queue depth (~660 MB VRAM per GPU stream, double-buffered)
 
 # Array Geometry & Beam Setup
 spacing_m: 0.6                    # Physical antenna spacing in meters
 max_beams: 2                      # Concurrent beam slots (0: Target Beam, 1: Off-Axis Reference Beam)
 initial_active_beams: 2           # Active beams on startup (Galactic Center & Vela)
 sizeof_complex_float: 8           # float2 (4-byte real + 4-byte imag) per formed beam sample
-max_alive_antennas: 7             # Compact alive baseband channels to record
 
 # ------------------------------------------------------------------------------
 # Metadata Pool
@@ -103,23 +102,6 @@ host_formed_beams_buffer_1:
   zero_new_frames: true
   mlock_frames: false
 
-host_alive_voltages_buffer_0:
-  kotekan_buffer: standard
-  num_frames: buffer_depth
-  frame_size: samples_per_data_set * num_local_freq * max_alive_antennas # ~36.13 MB
-  numa_node: 0
-  metadata_pool: main_pool
-  zero_new_frames: true
-  mlock_frames: false
-
-host_alive_voltages_buffer_1:
-  kotekan_buffer: standard
-  num_frames: buffer_depth
-  frame_size: samples_per_data_set * num_local_freq * max_alive_antennas # ~36.13 MB
-  numa_node: 0
-  metadata_pool: main_pool
-  zero_new_frames: true
-  mlock_frames: false
 
 # ------------------------------------------------------------------------------
 # Network Ingest Stage: DPDK Core
@@ -186,12 +168,10 @@ gpu:
     # Real-Time Automatic Dead & Saturated Antenna Detection/Masking
     - name: cudaAntennaMaskCommand
       gpu_mem_voltage: voltage_0
-      gpu_mem_alive_voltages: alive_voltages_0
-      max_alive_antennas: 7
       num_elements: 64
       num_local_freq: 336
       samples_per_data_set: 15360
-      buffer_depth: 3
+      buffer_depth: 2
       auto_detect_enabled: true
       blank_voltages_enabled: false
       dead_power_threshold: 5.0
@@ -202,14 +182,14 @@ gpu:
     # Direct Fused Multi-Beam Tracker Kernel with Sub-Frame Phase Interpolation
     - name: cudaDirectBeamTrackerCommand
       gpu_mem_voltage: voltage_0
-      gpu_mem_formed_beams: raw_formed_beams_0
+      gpu_mem_formed_beams: formed_beams_0
       num_elements: 64
       num_local_freq: 336
       samples_per_data_set: 15360
       spacing_m: 0.6
       max_beams: 2
       initial_active_beams: 2
-      buffer_depth: 3
+      buffer_depth: 2
       time_chunk_size: 256
       time_unroll: 4
       beam_tile_size: 4
@@ -226,17 +206,17 @@ gpu:
       source_ra_deg_1: 128.8361
       source_dec_deg_1: -45.1764
 
-    # Real-Time Joint Matrix Unmixing (BiSLC Sidelobe Cancellation)
+    # Real-Time Joint Matrix Unmixing (BiSLC Sidelobe Cancellation - In-Place)
     - name: cudaBiSLCCommand
-      gpu_mem_formed_beams: raw_formed_beams_0
-      gpu_mem_cleaned_beams: cleaned_beams_0
+      gpu_mem_formed_beams: formed_beams_0
+      gpu_mem_cleaned_beams: formed_beams_0
       num_elements: 64
       num_local_freq: 336
       samples_per_data_set: 15360
       spacing_m: 0.6
       max_beams: 2
       initial_active_beams: 2
-      buffer_depth: 3
+      buffer_depth: 2
       diagonal_loading: 1.0e-4
       enabled: true
       freq_start_hz: 300000000.0
@@ -244,12 +224,12 @@ gpu:
 
     # Real-Time Transient Trigger & VRAM Circular Buffer Dump Node
     - name: cudaTransientTriggerCommand
-      gpu_mem_cleaned_beams: cleaned_beams_0
+      gpu_mem_cleaned_beams: formed_beams_0
       num_local_freq: 336
       samples_per_data_set: 15360
       max_beams: 2
-      buffer_depth: 3
-      ring_buffer_depth: 32
+      buffer_depth: 2
+      ring_buffer_depth: 16
       pre_trigger_frames: 4
       post_trigger_frames: 4
       sk_threshold: 0.08
@@ -262,12 +242,8 @@ gpu:
     - name: cudaSyncOutput
     - name: cudaOutputData
       in_buf: host_voltage
-      gpu_mem: cleaned_beams_0
+      gpu_mem: formed_beams_0
       out_buf: host_formed_beams
-    - name: cudaOutputData
-      in_buf: host_voltage
-      gpu_mem: alive_voltages_0
-      out_buf: host_alive_voltages
 
   # Command Pipeline for Stream 1 (Frequencies 336..671, 400.8 - 501.3 MHz)
   commands_1: &command_list_1
@@ -279,12 +255,10 @@ gpu:
     # Real-Time Automatic Dead & Saturated Antenna Detection/Masking
     - name: cudaAntennaMaskCommand
       gpu_mem_voltage: voltage_1
-      gpu_mem_alive_voltages: alive_voltages_1
-      max_alive_antennas: 7
       num_elements: 64
       num_local_freq: 336
       samples_per_data_set: 15360
-      buffer_depth: 3
+      buffer_depth: 2
       auto_detect_enabled: true
       blank_voltages_enabled: false
       dead_power_threshold: 5.0
@@ -295,14 +269,14 @@ gpu:
     # Direct Fused Multi-Beam Tracker Kernel with Sub-Frame Phase Interpolation
     - name: cudaDirectBeamTrackerCommand
       gpu_mem_voltage: voltage_1
-      gpu_mem_formed_beams: raw_formed_beams_1
+      gpu_mem_formed_beams: formed_beams_1
       num_elements: 64
       num_local_freq: 336
       samples_per_data_set: 15360
       spacing_m: 0.6
       max_beams: 2
       initial_active_beams: 2
-      buffer_depth: 3
+      buffer_depth: 2
       time_chunk_size: 256
       time_unroll: 4
       beam_tile_size: 4
@@ -319,17 +293,17 @@ gpu:
       source_ra_deg_1: 128.8361
       source_dec_deg_1: -45.1764
 
-    # Real-Time Joint Matrix Unmixing (BiSLC Sidelobe Cancellation)
+    # Real-Time Joint Matrix Unmixing (BiSLC Sidelobe Cancellation - In-Place)
     - name: cudaBiSLCCommand
-      gpu_mem_formed_beams: raw_formed_beams_1
-      gpu_mem_cleaned_beams: cleaned_beams_1
+      gpu_mem_formed_beams: formed_beams_1
+      gpu_mem_cleaned_beams: formed_beams_1
       num_elements: 64
       num_local_freq: 336
       samples_per_data_set: 15360
       spacing_m: 0.6
       max_beams: 2
       initial_active_beams: 2
-      buffer_depth: 3
+      buffer_depth: 2
       diagonal_loading: 1.0e-4
       enabled: true
       freq_start_hz: 400800000.0
@@ -337,12 +311,12 @@ gpu:
 
     # Real-Time Transient Trigger & VRAM Circular Buffer Dump Node
     - name: cudaTransientTriggerCommand
-      gpu_mem_cleaned_beams: cleaned_beams_1
+      gpu_mem_cleaned_beams: formed_beams_1
       num_local_freq: 336
       samples_per_data_set: 15360
       max_beams: 2
-      buffer_depth: 3
-      ring_buffer_depth: 32
+      buffer_depth: 2
+      ring_buffer_depth: 16
       pre_trigger_frames: 4
       post_trigger_frames: 4
       sk_threshold: 0.08
@@ -355,35 +329,28 @@ gpu:
     - name: cudaSyncOutput
     - name: cudaOutputData
       in_buf: host_voltage
-      gpu_mem: cleaned_beams_1
+      gpu_mem: formed_beams_1
       out_buf: host_formed_beams
-    - name: cudaOutputData
-      in_buf: host_voltage
-      gpu_mem: alive_voltages_1
-      out_buf: host_alive_voltages
 
   gpu_0:
     kotekan_stage: cudaProcess
     gpu_id: 0
-    buffer_depth: 3
+    buffer_depth: 2
     commands: *command_list_0
     in_buffers:
       host_voltage: network_capture_buf_0
     out_buffers:
       host_formed_beams: host_formed_beams_buffer_0
-      host_alive_voltages: host_alive_voltages_buffer_0
 
   gpu_1:
     kotekan_stage: cudaProcess
     gpu_id: 0
-    buffer_depth: 3
+    buffer_depth: 2
     commands: *command_list_1
     in_buffers:
       host_voltage: network_capture_buf_1
     out_buffers:
       host_formed_beams: host_formed_beams_buffer_1
-      host_alive_voltages: host_alive_voltages_buffer_1
-
 # ------------------------------------------------------------------------------
 # Monitoring & Live Telemetry Sinks (In-Memory Only, Zero Continuous Disk I/O)
 # ------------------------------------------------------------------------------
@@ -402,15 +369,6 @@ inspect_beams_1:
   kotekan_stage: restInspectFrame
   in_buf: host_formed_beams_buffer_1
   len: 4194304                     # 4 MB snapshot for dashboard telemetry
-
-# In-memory drop sinks for alive antenna diagnostic buffers (no disk writing)
-drop_alive_0:
-  kotekan_stage: dropAllFrames
-  in_buf: host_alive_voltages_buffer_0
-
-drop_alive_1:
-  kotekan_stage: dropAllFrames
-  in_buf: host_alive_voltages_buffer_1
 
 # Continuous raw baseband recording is disabled by default to prevent disk filling.
 # (Uncomment below only if full un-triggered continuous recording is explicitly needed)
