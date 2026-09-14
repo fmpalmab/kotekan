@@ -133,6 +133,7 @@ dpdk:
   max_rx_pkt_len: 9000
   num_mbufs: 9600
   mbuf_data_size: 9216
+  startup_sleep: 40                 # 40s wait for Intel E810 PHY/link stabilization
 
   handlers:
     - dpdk_handler: rfsocHandlerShuffle
@@ -253,7 +254,7 @@ gpu:
       sk_threshold: 0.08
       rfi_threshold: 0.30
       min_flagged_channels: 8
-      dump_directory: "./transient_candidates/stream_0"
+      dump_directory: "/data/tracker/tracker_64ant/transient_candidates/stream_0"
       auto_dump_enabled: true
       enabled: true
 
@@ -346,7 +347,7 @@ gpu:
       sk_threshold: 0.08
       rfi_threshold: 0.30
       min_flagged_channels: 8
-      dump_directory: "./transient_candidates/stream_1"
+      dump_directory: "/data/tracker/tracker_64ant/transient_candidates/stream_1"
       auto_dump_enabled: true
       enabled: true
 
@@ -388,7 +389,7 @@ gpu:
 raw_file_write_0:
   kotekan_stage: rawFileWrite
   in_buf: host_formed_beams_buffer_0
-  base_dir: "./raw_stream_dump_0"
+  base_dir: "/data/tracker/tracker_64ant"
   file_name: "cleaned_beams_stream0"
   file_ext: "raw"
   num_frames_per_file: 20
@@ -397,7 +398,7 @@ raw_file_write_0:
 raw_file_write_1:
   kotekan_stage: rawFileWrite
   in_buf: host_formed_beams_buffer_1
-  base_dir: "./raw_stream_dump_1"
+  base_dir: "/data/tracker/tracker_64ant"
   file_name: "cleaned_beams_stream1"
   file_ext: "raw"
   num_frames_per_file: 20

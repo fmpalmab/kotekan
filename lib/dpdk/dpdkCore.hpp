@@ -226,8 +226,8 @@ private:
     /// Initial memory allocation in MB
     std::string init_mem_alloc;
 
-    /// Optional startup sleep before starting RX loop
-    uint32_t startup_sleep = 0;
+    /// Optional startup sleep before starting RX loop (default: 40s for E810 link stabilization)
+    uint32_t startup_sleep = 40;
 
     /// One of these exists per system port
     dpdkRXhandler** handlers;

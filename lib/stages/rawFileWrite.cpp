@@ -16,11 +16,13 @@
 #include <atomic>     // for __atomic_base, atomic
 #include <errno.h>    // for errno
 #include <fcntl.h>    // for open, O_CREAT, O_WRONLY
+#include <filesystem> // for create_directories
 #include <functional> // for bind, function
 #include <memory>     // for shared_ptr, __shared_ptr_access
 #include <stdint.h>   // for uint32_t, int32_t, uint8_t
 #include <stdio.h>    // for snprintf, size_t
 #include <stdlib.h>   // for exit
+#include <system_error>
 #include <unistd.h>   // for write, close, gethostname, ssize_t
 
 
@@ -44,6 +46,8 @@ rawFileWrite::rawFileWrite(Config& config, const std::string& unique_name,
     _num_frames_per_file = config.get_default<uint32_t>(unique_name, "num_frames_per_file", 1);
     _prefix_hostname = config.get_default<bool>(unique_name, "prefix_hostname", true);
     _exit_after_n_files = config.get_default<uint32_t>(unique_name, "exit_after_n_files", 0);
+    _skip_frames = config.get_default<uint32_t>(unique_name, "skip_frames", 0);
+    _skip_zero_frames = config.get_default<bool>(unique_name, "skip_zero_frames", true);
 
     if (_exit_after_n_files > 0)
         waiting_for_max_frames++;
@@ -57,6 +61,7 @@ void rawFileWrite::main_thread() {
     uint32_t file_num = 0;
     uint32_t frame_id = 0;
     uint32_t frame_ctr = 0;
+    uint32_t frames_skipped = 0;
     uint8_t* frame = nullptr;
     char hostname[64];
     gethostname(hostname, 64);
@@ -81,6 +86,44 @@ void rawFileWrite::main_thread() {
                 "is set dynamically and will not be written to the file.");
         }
 
+        // Skip initial frames if configured (e.g. for pipeline warmup)
+        if (_skip_frames > 0 && frames_skipped < _skip_frames) {
+            frames_skipped++;
+            DEBUG("rawFileWrite {:s}: Skipping initial frame {:d} ({:d}/{:d})", unique_name,
+                  frame_id, frames_skipped, _skip_frames);
+            buf->mark_frame_empty(unique_name, frame_id);
+            frame_id = (frame_id + 1) % buf->num_frames;
+            continue;
+        }
+
+        // Skip all-zero frames (e.g. during DPDK startup/warmup or packet loss before link stabilization)
+        if (_skip_zero_frames) {
+            const uint64_t* p64 = reinterpret_cast<const uint64_t*>(frame);
+            const size_t num_u64 = buf->frame_size / sizeof(uint64_t);
+            bool is_zero = true;
+            for (size_t i = 0; i < num_u64; ++i) {
+                if (p64[i] != 0) {
+                    is_zero = false;
+                    break;
+                }
+            }
+            if (is_zero) {
+                const size_t rem = buf->frame_size % sizeof(uint64_t);
+                for (size_t i = buf->frame_size - rem; i < buf->frame_size; ++i) {
+                    if (frame[i] != 0) {
+                        is_zero = false;
+                        break;
+                    }
+                }
+            }
+            if (is_zero) {
+                DEBUG("rawFileWrite {:s}: Skipping all-zero frame {:d}", unique_name, frame_id);
+                buf->mark_frame_empty(unique_name, frame_id);
+                frame_id = (frame_id + 1) % buf->num_frames;
+                continue;
+            }
+        }
+
         // Start timing the write time
         double st = current_time();
 
@@ -93,6 +136,9 @@ void rawFileWrite::main_thread() {
                 snprintf(full_path, full_path_len, "%s/%s_%07u.%s", _base_dir.c_str(),
                          _file_name.c_str(), file_num, _file_ext.c_str());
             }
+
+            std::error_code ec;
+            std::filesystem::create_directories(_base_dir, ec);
 
             fd = open(full_path, O_WRONLY | O_CREAT, 0666);
 

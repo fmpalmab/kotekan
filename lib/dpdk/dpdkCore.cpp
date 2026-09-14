@@ -91,7 +91,7 @@ dpdkCore::dpdkCore(Config& config, const string& unique_name, bufferContainer& b
     const uint32_t mbuf_size = mbuf_data_size + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM;
     INFO("DPDK mbuf data size: {:d} bytes, mbuf size: {:d} bytes", mbuf_data_size, mbuf_size);
 
-    startup_sleep = config.get_default<uint32_t>(unique_name, "startup_sleep", 0);
+    startup_sleep = config.get_default<uint32_t>(unique_name, "startup_sleep", 40);
 
     // Convert the lcore to port map into a simple c style struct
     // This is basically done to remove overhead in the critial packet processing loop.
