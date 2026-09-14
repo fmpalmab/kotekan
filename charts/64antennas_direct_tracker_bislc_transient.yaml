@@ -5,7 +5,8 @@
 # Pipeline Graph:
 # [ DPDK Ingest ] ──> [ cudaAntennaMaskCommand ] ──> [ cudaDirectBeamTracker ]
 #                 ──> [ cudaBiSLCCommand ] ──> [ cudaTransientTriggerCommand ]
-#                 ──> [ rawFileWrite / Baseband Disk Sink ]
+#                 ──> [ Event-Driven Candidate Dump (only on detection) ]
+#                 ──> [ restInspectFrame (in-memory telemetry) ]
 # ==============================================================================
 
 type: config
@@ -384,22 +385,49 @@ gpu:
       host_alive_voltages: host_alive_voltages_buffer_1
 
 # ------------------------------------------------------------------------------
-# Continuous Downstream Baseband Sinks (rawFileWrite)
+# Monitoring & Live Telemetry Sinks (In-Memory Only, Zero Continuous Disk I/O)
 # ------------------------------------------------------------------------------
-raw_file_write_0:
-  kotekan_stage: rawFileWrite
-  in_buf: host_formed_beams_buffer_0
-  base_dir: "/data/tracker/tracker_64ant"
-  file_name: "cleaned_beams_stream0"
-  file_ext: "raw"
-  num_frames_per_file: 20
-  exit_after_n_files: 0
+# Disk writing is EVENT-DRIVEN ONLY:
+# Handled exclusively by cudaTransientTriggerCommand when an astrophysical
+# transient candidate is detected or manually triggered via REST.
+# Candidates are saved to: /data/tracker/tracker_64ant/transient_candidates/stream_{0,1}
 
-raw_file_write_1:
-  kotekan_stage: rawFileWrite
+# Live REST inspection endpoints for waterfall telemetry & beam health snapshots
+inspect_beams_0:
+  kotekan_stage: restInspectFrame
+  in_buf: host_formed_beams_buffer_0
+  len: 4194304                     # 4 MB snapshot for dashboard telemetry
+
+inspect_beams_1:
+  kotekan_stage: restInspectFrame
   in_buf: host_formed_beams_buffer_1
-  base_dir: "/data/tracker/tracker_64ant"
-  file_name: "cleaned_beams_stream1"
-  file_ext: "raw"
-  num_frames_per_file: 20
-  exit_after_n_files: 0
+  len: 4194304                     # 4 MB snapshot for dashboard telemetry
+
+# In-memory drop sinks for alive antenna diagnostic buffers (no disk writing)
+drop_alive_0:
+  kotekan_stage: dropAllFrames
+  in_buf: host_alive_voltages_buffer_0
+
+drop_alive_1:
+  kotekan_stage: dropAllFrames
+  in_buf: host_alive_voltages_buffer_1
+
+# Continuous raw baseband recording is disabled by default to prevent disk filling.
+# (Uncomment below only if full un-triggered continuous recording is explicitly needed)
+# raw_file_write_0:
+#   kotekan_stage: rawFileWrite
+#   in_buf: host_formed_beams_buffer_0
+#   base_dir: "/data/tracker/tracker_64ant"
+#   file_name: "cleaned_beams_stream0"
+#   file_ext: "raw"
+#   num_frames_per_file: 20
+#   exit_after_n_files: 0
+#
+# raw_file_write_1:
+#   kotekan_stage: rawFileWrite
+#   in_buf: host_formed_beams_buffer_1
+#   base_dir: "/data/tracker/tracker_64ant"
+#   file_name: "cleaned_beams_stream1"
+#   file_ext: "raw"
+#   num_frames_per_file: 20
+#   exit_after_n_files: 0
