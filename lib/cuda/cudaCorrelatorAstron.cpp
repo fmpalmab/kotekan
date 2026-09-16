@@ -1,6 +1,7 @@
 #include "cudaCorrelatorAstron.hpp"
 
 #include "cuda.h"             // for cuGetErrorString, cuLaunchKernel, CUresult, cudaError_enum
+#include <cuda_runtime.h>     // for cudaDeviceProp, cudaGetDeviceProperties, cudaSuccess
 #include "gpuCommand.hpp"     // for gpuCommandType
 #include "kotekanLogging.hpp" // for INFO
 
@@ -46,8 +47,23 @@ cudaCorrelatorAstron::cudaCorrelatorAstron(Config& config, const std::string& un
     // pipeline per frequency block). The compiled kernel is device-wide, so
     // only the first command instance on that device should register it.
     if (inst == 0 && !device.runtime_kernels.count("correlate")) {
+        std::string arch_flag = config.get_default<std::string>(unique_name, "correlator_arch", "");
+        if (arch_flag.empty()) {
+            cudaDeviceProp prop;
+            if (cudaGetDeviceProperties(&prop, device.get_gpu_id()) == cudaSuccess) {
+                arch_flag = fmt::format("-arch=compute_{:d}{:d}", prop.major, prop.minor);
+                INFO("cudaCorrelatorAstron: Auto-detected GPU {:d} compute capability: sm_{:d}{:d} -> compiling with {:s}",
+                     device.get_gpu_id(), prop.major, prop.minor, arch_flag);
+            } else {
+                arch_flag = "-arch=compute_80";
+                INFO("cudaCorrelatorAstron: Falling back to default {:s}", arch_flag);
+            }
+        } else if (arch_flag.rfind("-arch=", 0) != 0) {
+            arch_flag = "-arch=" + arch_flag;
+        }
+
         std::vector<std::string> opts = {
-            "-arch=compute_86",
+            arch_flag,
             "-lineinfo",
             "-DNR_BITS=4",
             fmt::format("-DNR_RECEIVERS={:d}", _num_elements / 2),
