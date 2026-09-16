@@ -157,7 +157,6 @@ static std::vector<std::string> get_cuda_include_paths() {
             if (seen.find(canon) == seen.end()) {
                 seen.insert(canon);
                 inc_paths.push_back(path);
-                INFO("cudaDeviceInterface: Detected CUDA include path: {:s}", path);
             }
             // In modern CUDA (e.g. CUDA 12+), CCCL headers (cuda/std, cooperative_groups, thrust, cub) may reside in cccl/
             std::string cccl = path + "/cccl";
@@ -172,7 +171,6 @@ static std::vector<std::string> get_cuda_include_paths() {
                 if (seen.find(canon_cccl) == seen.end()) {
                     seen.insert(canon_cccl);
                     inc_paths.push_back(cccl);
-                    INFO("cudaDeviceInterface: Detected CCCL include path: {:s}", cccl);
                 }
             }
         }
@@ -278,6 +276,7 @@ void cudaDeviceInterface::build(const std::string& kernel_filename,
     // Convert compiler options to a c-style array with dynamically resolved CUDA include paths
     std::vector<std::string> extra_opts;
     for (const auto& inc_path : get_cuda_include_paths()) {
+        INFO("cudaDeviceInterface: Using NVRTC include path: {:s}", inc_path);
         extra_opts.push_back(std::string("--include-path=") + inc_path);
     }
     extra_opts.push_back("--std=c++17");
