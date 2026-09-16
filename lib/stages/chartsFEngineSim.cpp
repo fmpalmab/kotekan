@@ -165,6 +165,11 @@ void chartsFEngineSim::main_thread() {
         auto meta = get_chord_metadata(out_buf, frame_id);
         if (meta) {
             meta->set_fpga_seq_num(static_cast<uint64_t>(frame_idx));
+            std::vector<int> coarse_freq(_num_local_freq);
+            for (int f = 0; f < _num_local_freq; ++f) {
+                coarse_freq[f] = f;
+            }
+            meta->set_coarse_freq(coarse_freq);
         }
 
         int64_t global_t_start = static_cast<int64_t>(frame_idx) * _samples_per_data_set;
