@@ -82,7 +82,7 @@ write_baseband:
   file_name: baseband_64ant_5ms
   file_ext: bin
   num_frames_per_file: 1
-  exit_after_n_files: 0
+  exit_after_n_files: 1
   prefix_hostname: false
   skip_zero_frames: false
 

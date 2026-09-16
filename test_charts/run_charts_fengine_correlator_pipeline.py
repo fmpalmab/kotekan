@@ -125,7 +125,7 @@ write_baseband:
   file_name: {baseband_name}
   file_ext: bin
   num_frames_per_file: 1
-  exit_after_n_files: 0
+  exit_after_n_files: {num_frames}
   prefix_hostname: false
   skip_zero_frames: false
 

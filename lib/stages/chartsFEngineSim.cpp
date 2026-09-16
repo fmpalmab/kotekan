@@ -1,6 +1,7 @@
 #include "chartsFEngineSim.hpp"
 
 #include "StageFactory.hpp"
+#include "chordMetadata.hpp"
 #include "kotekanLogging.hpp"
 
 #include <algorithm>
@@ -79,6 +80,7 @@ chartsFEngineSim::chartsFEngineSim(Config& config, const std::string& unique_nam
     Stage(config, unique_name, buffer_container, std::bind(&chartsFEngineSim::main_thread, this)) {
 
     out_buf = get_buffer("out_buf");
+    out_buf->register_producer(unique_name);
 
     _scenario = config.get_default<std::string>(unique_name, "scenario", "vela");
     _use_noise = config.get_default<bool>(unique_name, "use_noise", true);
@@ -157,6 +159,15 @@ void chartsFEngineSim::main_thread() {
     for (int frame_idx = 0; frame_idx < _num_frames && !stop_thread; ++frame_idx) {
         uint8_t* frame_ptr = (uint8_t*)out_buf->wait_for_empty_frame(unique_name, frame_id);
         if (frame_ptr == nullptr) break;
+
+        // Initialize metadata object for downstream stages (rawFileWrite, cudaInputData)
+        out_buf->allocate_new_metadata_object(frame_id);
+        auto meta = get_chord_metadata(out_buf, frame_id);
+        if (meta) {
+            meta->set_fpga_seq_num(frame_idx);
+            meta->set_dataset_id(frame_idx);
+            meta->set_stream_id(0);
+        }
 
         int64_t global_t_start = static_cast<int64_t>(frame_idx) * _samples_per_data_set;
 
