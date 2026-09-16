@@ -110,10 +110,20 @@ python3 test_charts/run_charts_fengine_correlator_pipeline.py \
     --num-freq 336
 
 # ============================================================================
-# 5. Inventory & Checksum Verification
+# 5. Generate Master PNG Dashboard (64 Antennas & All Correlation Matrices)
 # ============================================================================
 echo "========================================="
-echo " 5. Inventory of Generated Datasets in ${OUTPUT_DIR}"
+echo " Generating Master PNG Correlation Dashboard..."
+echo "========================================="
+python3 test_charts/visualize_charts_64ant_correlations.py \
+    --dumps-dir "${OUTPUT_DIR}/correlator" \
+    --output "${OUTPUT_DIR}/plots/charts_64ant_correlations_overview.png"
+
+# ============================================================================
+# 6. Inventory & Checksum Verification
+# ============================================================================
+echo "========================================="
+echo " 6. Inventory of Generated Datasets in ${OUTPUT_DIR}"
 echo "========================================="
 echo "--- BASEBAND DUMPS (HDF5 & BIN) ---"
 ls -lh "${OUTPUT_DIR}/baseband"
