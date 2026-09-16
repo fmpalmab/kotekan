@@ -164,9 +164,7 @@ void chartsFEngineSim::main_thread() {
         out_buf->allocate_new_metadata_object(frame_id);
         auto meta = get_chord_metadata(out_buf, frame_id);
         if (meta) {
-            meta->set_fpga_seq_num(frame_idx);
-            meta->set_dataset_id(frame_idx);
-            meta->set_stream_id(0);
+            meta->set_fpga_seq_num(static_cast<uint64_t>(frame_idx));
         }
 
         int64_t global_t_start = static_cast<int64_t>(frame_idx) * _samples_per_data_set;
