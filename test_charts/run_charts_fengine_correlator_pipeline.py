@@ -238,6 +238,20 @@ def run_pipeline(
     print("\n--- PHASE 2: Correlating Baseband Streams via Kotekan AstronCorrelator ---")
     env = dict(os.environ)
     env["LD_LIBRARY_PATH"] = f"{_kotekan_root / 'build' / 'external' / 'n2k'}:{env.get('LD_LIBRARY_PATH', '')}"
+    if "CUDA_HOME" not in env:
+        for var in ["CUDA_ROOT", "EBROOTCUDA", "CUDA_PATH"]:
+            if var in env:
+                env["CUDA_HOME"] = env[var]
+                break
+        if "CUDA_HOME" not in env:
+            import shutil
+            nvcc_bin = shutil.which("nvcc")
+            if nvcc_bin:
+                env["CUDA_HOME"] = str(Path(nvcc_bin).resolve().parent.parent)
+    if "CUDA_HOME" in env:
+        cuda_inc = f"{env['CUDA_HOME']}/include"
+        env["CUDA_PATH"] = env["CUDA_HOME"]
+        env["CPATH"] = f"{cuda_inc}:{env.get('CPATH', '')}"
 
     for sc in scenarios:
         bb_file_base = f"{sc}_64ant_5ms"

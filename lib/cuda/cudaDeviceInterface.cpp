@@ -17,6 +17,12 @@
 #include <stdlib.h>        // for free, malloc, size_t, NULL
 #include <utility>         // for pair
 
+#include <cstdlib>
+#include <filesystem>
+#include <set>
+#include <sstream>
+#include <system_error>
+
 using kotekan::Config;
 
 std::map<int32_t, std::weak_ptr<cudaDeviceInterface>> cudaDeviceInterface::inst_map;
@@ -133,6 +139,102 @@ void cudaDeviceInterface::async_copy_gpu_to_host(void* dst, void* src, size_t le
     }
 }
 
+static std::vector<std::string> get_cuda_include_paths() {
+    std::vector<std::string> inc_paths;
+    std::set<std::string> seen;
+
+    auto try_add = [&](const std::string& path) {
+        if (path.empty()) return;
+        std::error_code ec;
+        if (std::filesystem::is_directory(path, ec)) {
+            std::string canon;
+            try {
+                canon = std::filesystem::canonical(path, ec).string();
+            } catch (...) {
+                canon = path;
+            }
+            if (canon.empty()) canon = path;
+            if (seen.find(canon) == seen.end()) {
+                seen.insert(canon);
+                inc_paths.push_back(path);
+                INFO("cudaDeviceInterface: Detected CUDA include path: {:s}", path);
+            }
+            // In modern CUDA (e.g. CUDA 12+), CCCL headers (cuda/std, cooperative_groups, thrust, cub) may reside in cccl/
+            std::string cccl = path + "/cccl";
+            if (std::filesystem::is_directory(cccl, ec)) {
+                std::string canon_cccl;
+                try {
+                    canon_cccl = std::filesystem::canonical(cccl, ec).string();
+                } catch (...) {
+                    canon_cccl = cccl;
+                }
+                if (canon_cccl.empty()) canon_cccl = cccl;
+                if (seen.find(canon_cccl) == seen.end()) {
+                    seen.insert(canon_cccl);
+                    inc_paths.push_back(cccl);
+                    INFO("cudaDeviceInterface: Detected CCCL include path: {:s}", cccl);
+                }
+            }
+        }
+    };
+
+    // 1. Environment variables from cluster modules (e.g. Trillium, Compute Canada, SLURM)
+    const char* env_vars[] = {
+        "CUDA_HOME",
+        "CUDA_PATH",
+        "CUDA_ROOT",
+        "EBROOTCUDA",
+        "CUDADIR",
+        "CUDA_INCLUDE_DIR",
+        "CUDA_INC_PATH",
+        "CUDAToolkit_ROOT"
+    };
+    for (const char* var : env_vars) {
+        const char* val = std::getenv(var);
+        if (val && *val) {
+            std::string root(val);
+            try_add(root + "/include");
+            try_add(root);
+        }
+    }
+
+    // 2. Check CPATH / C_INCLUDE_PATH / CPLUS_INCLUDE_PATH
+    const char* inc_envs[] = {"CPATH", "C_INCLUDE_PATH", "CPLUS_INCLUDE_PATH"};
+    for (const char* var : inc_envs) {
+        const char* val = std::getenv(var);
+        if (val && *val) {
+            std::stringstream ss(val);
+            std::string item;
+            while (std::getline(ss, item, ':')) {
+                if (!item.empty()) {
+                    try_add(item);
+                }
+            }
+        }
+    }
+
+    // 3. Compile-time definition from CMake FindCUDAToolkit
+#ifdef KOTEKAN_CUDA_INCLUDE_DIRS
+    {
+        std::stringstream ss(KOTEKAN_CUDA_INCLUDE_DIRS);
+        std::string item;
+        while (std::getline(ss, item, ';')) {
+            if (!item.empty()) {
+                try_add(item);
+            }
+        }
+    }
+#endif
+
+    // 4. Standard default fallback locations
+    try_add("/usr/local/cuda/include");
+    try_add("/usr/local/include");
+    try_add("/opt/cuda/include");
+    try_add("/usr/include");
+
+    return inc_paths;
+}
+
 void cudaDeviceInterface::build(const std::string& kernel_filename,
                                 const std::vector<std::string>& kernel_names,
                                 const std::vector<std::string>& opts) {
@@ -173,17 +275,20 @@ void cudaDeviceInterface::build(const std::string& kernel_filename,
 
     free(program_buffer);
 
-    // Convert compiler options to a c-style array.
+    // Convert compiler options to a c-style array with dynamically resolved CUDA include paths
+    std::vector<std::string> extra_opts;
+    for (const auto& inc_path : get_cuda_include_paths()) {
+        extra_opts.push_back(std::string("--include-path=") + inc_path);
+    }
+    extra_opts.push_back("--std=c++17");
+
     std::vector<const char*> cstrings;
-    cstrings.reserve(opts.size() + 4);
+    cstrings.reserve(opts.size() + extra_opts.size());
 
     for (auto& s : opts)
         cstrings.push_back(s.c_str());
-
-    cstrings.push_back("--include-path=/usr/local/cuda/include");
-    cstrings.push_back("--include-path=/usr/local/cuda/include/cccl");
-
-    cstrings.push_back("--std=c++17");
+    for (auto& s : extra_opts)
+        cstrings.push_back(s.c_str());
 
     // Compile the kernel
     res = nvrtcCompileProgram(prog, cstrings.size(), cstrings.data());    // TODO Abstract error checking

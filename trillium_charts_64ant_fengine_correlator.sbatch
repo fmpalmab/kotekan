@@ -40,6 +40,27 @@ cmake --version | head -n 1
 python3 --version | head -n 1
 nvidia-smi
 
+# Resolve CUDA root and include directory for NVRTC and runtime compilers
+if [ -z "${CUDA_HOME:-}" ]; then
+    if [ -n "${CUDA_ROOT:-}" ]; then
+        export CUDA_HOME="${CUDA_ROOT}"
+    elif [ -n "${EBROOTCUDA:-}" ]; then
+        export CUDA_HOME="${EBROOTCUDA}"
+    elif which nvcc >/dev/null 2>&1; then
+        export CUDA_HOME="$(cd "$(dirname "$(which nvcc)")/.." && pwd)"
+    fi
+fi
+
+if [ -n "${CUDA_HOME:-}" ]; then
+    export CUDA_PATH="${CUDA_HOME}"
+    export CUDA_ROOT="${CUDA_HOME}"
+    export CPATH="${CUDA_HOME}/include:${CPATH:-}"
+    export C_INCLUDE_PATH="${CUDA_HOME}/include:${C_INCLUDE_PATH:-}"
+    export CPLUS_INCLUDE_PATH="${CUDA_HOME}/include:${CPLUS_INCLUDE_PATH:-}"
+    echo " CUDA Toolkit Directory : ${CUDA_HOME}"
+    echo " CUDA Include Directory : ${CUDA_HOME}/include"
+fi
+
 # Setup high-speed scratch virtual environment inheriting CVMFS modules (numpy, scipy, matplotlib, h5py)
 VENV_DIR="${SLURM_TMPDIR:-/tmp}/kotekan_pyenv_${SLURM_JOB_ID:-manual}"
 if [ ! -d "${VENV_DIR}" ]; then
@@ -68,7 +89,8 @@ echo " 2. Building Kotekan Framework with CUDA"
 echo "========================================="
 mkdir -p build
 cd build
-cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="90;80" -DUSE_NUMA=ON -DWERROR=OFF -DCMAKE_SKIP_RPATH=TRUE
+cmake .. -DUSE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="90;80" -DUSE_NUMA=ON -DWERROR=OFF -DCMAKE_SKIP_RPATH=TRUE \
+    ${CUDA_HOME:+-DCUDAToolkit_ROOT="${CUDA_HOME}"}
 make -j${SLURM_CPUS_PER_TASK:-8} kotekan
 cd ..
 

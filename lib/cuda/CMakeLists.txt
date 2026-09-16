@@ -150,6 +150,13 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --forward-unknown-to-host-compiler")
 target_include_directories(kotekan_cuda INTERFACE ${CUDAToolkit_INCLUDE_DIRS})
 target_include_directories(kotekan_cuda PUBLIC .)
 
+if(DEFINED CUDAToolkit_INCLUDE_DIRS)
+    target_compile_definitions(
+        kotekan_cuda
+        PRIVATE
+        KOTEKAN_CUDA_INCLUDE_DIRS="${CUDAToolkit_INCLUDE_DIRS}")
+endif()
+
 target_compile_options(kotekan_cuda PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>)
 
 add_dependencies(kotekan_cuda kotekan_gpu)
