@@ -51,11 +51,21 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.patches as patches
-import matplotlib.pyplot as plt
-import numpy as np
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.patches as patches
+    import matplotlib.pyplot as plt
+    import numpy as np
+except ImportError as e:
+    sys.stderr.write(
+        f"\n[ERROR] Missing required Python scientific stack: {e}\n\n"
+        "On Trillium / Compute Canada, please load the scientific environment:\n\n"
+        "    module load python/3.11 scipy-stack\n\n"
+        "Or use the automated launcher:\n\n"
+        "    bash test_charts/run_visualize_spectrograms.sh [options]\n\n"
+    )
+    sys.exit(1)
 
 # Ensure test_charts path is available
 _test_charts_dir = Path(__file__).resolve().parent
