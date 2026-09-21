@@ -8,7 +8,9 @@ Implements a physically motivated noise model for the CHARTS receiver chain:
   - Stage 2 LNA:  PSA4-5043+ (Gain = 20.0 dB, NF = 0.65 dB @ 400 MHz)
   - Friis cascade: T_rx = T_1 + T_2 / G_1
   - Sky background: CMB (2.725 K) + Galactic synchrotron (Haslam 408 MHz scaling) + atmosphere (~1.5 K)
-  - Ground spillover: Modeled via ~100 deg HPBW patch pattern (default 8% spillover onto 290 K ground)
+  - Ground spillover: Modeled via ~100 deg HPBW patch pattern. The zenith-pointed main beam
+    looks at the sky; the 290 K ground is seen only through low-gain back/side lobes, giving a
+    beam-averaged effective spillover of ~2% (not the geometric back-lobe solid-angle fraction).
   - Solar radiation: Quiet / active Sun radio flux, topocentric ephemeris at Observatorio Carén,
     primary beam attenuation, and antenna temperature calculation
   - Digitizer mapping: Converts system temperature and celestial sources into 4-bit ADC voltage units
@@ -72,7 +74,15 @@ class AnalogChainParams:
 
     # Ground and environment
     t_ground_k: float = 290.0
-    ground_spillover_fraction: float = 0.08
+    # Effective ground-spillover fraction for a ZENITH-POINTED wide patch.
+    # The main ~100 deg HPBW beam looks at the sky; the ground at 290 K is only
+    # seen through the low-gain back/side lobes, NOT through 8% of the full beam
+    # at boresight gain. The effective spillover (beam-averaged) is therefore
+    # far below the geometric back-lobe solid-angle fraction. A realistic
+    # beam-averaged value for a patch over a ground plane is ~1.5-3%.
+    # (0.08 was overestimated and inflated the incoherent thermal floor, making
+    #  the per-antenna autocorrelation too large relative to cross-correlations.)
+    ground_spillover_fraction: float = 0.02
 
     # Digitizer calibration
     t_ref_k: float = 50.0          # Reference temperature mapped to sigma = 1.0 LSB
@@ -407,7 +417,7 @@ def print_noise_model_summary(model: ChartsNoiseModel):
     print(f"   Galactic Synchrotron    : {model.galactic_temperature(400.0, 0.5):.2f} K (galactic_factor=0.5)")
     print(f"   Atmosphere              : {T_ATM_400MHZ:.2f} K")
     print(f"   Total T_sky             : {t_sky_400:.2f} K")
-    print(f"   Ground Spillover (8%)   : {t_gnd:.2f} K")
+    print(f"   Ground Spillover ({model.params.ground_spillover_fraction*100:.1f}%) : {t_gnd:.2f} K")
     print(f"   T_noise (Incoherent)    : {model.t_rx + t_sky_400 + t_gnd:.2f} K")
     print("-" * 76)
     print(" 3. COMPARISON: 15:00 UTC (DAY) vs 03:00 UTC (NIGHT) at Carén:")
@@ -442,7 +452,7 @@ def print_noise_model_summary(model: ChartsNoiseModel):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="CHARTS Analog Noise Model Diagnostic")
     parser.add_argument("--hpbw", type=float, default=100.0, help="Patch antenna HPBW (deg)")
-    parser.add_argument("--spillover", type=float, default=0.08, help="Ground spillover fraction")
+    parser.add_argument("--spillover", type=float, default=0.02, help="Ground spillover fraction (beam-averaged, zenith-pointed patch)")
     args = parser.parse_args()
 
     params = AnalogChainParams(antenna_hpbw_deg=args.hpbw, ground_spillover_fraction=args.spillover)
