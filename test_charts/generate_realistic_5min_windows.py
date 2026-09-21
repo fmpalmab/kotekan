@@ -735,7 +735,7 @@ def generate_5min_window(
     print(f"\n>>> Dispatching {num_written} frames across {pool_workers} workers...")
     stats_list = []
     if pool_workers > 1:
-        with mp.Pool(processes=pool_workers) as pool:
+        with mp.Pool(processes=pool_workers, maxtasksperchild=100) as pool:
             for res in pool.imap_unordered(render_and_write_frame, jobs, chunksize=1):
                 stats_list.append(res)
                 if len(stats_list) % max(1, num_written // 10) == 0 or len(stats_list) == num_written:

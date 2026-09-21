@@ -113,10 +113,11 @@ echo "Kotekan binary verified: ${KOTEKAN_BIN}"
 # ============================================================================
 # 3. Simulation Parameters
 # ============================================================================
-# --- Core timing ---
+# --- Timing & Decimation ---
 DURATION_S="${DURATION_S:-120}"              # 2 minutes
 BG_CADENCE_S="${BG_CADENCE_S:-2.0}"          # Background frame cadence
 EVENT_DENSE_S="${EVENT_DENSE_S:-1.0}"        # Dense capture around events
+EVENT_SPARSE_CADENCE_MS="${EVENT_SPARSE_CADENCE_MS:-100.0}" # Sparse capture cadence (ms)
 
 # --- Array geometry ---
 ANTENNAS="${ANTENNAS:-64}"
@@ -152,7 +153,21 @@ WORKERS="${SLURM_CPUS_PER_TASK:-16}"
 BEAM_TARGETS="${BEAM_TARGETS:-83.633,22.014;83.7,22.1;83.5,21.9;83.8,22.0;83.4,22.1;83.9,21.8;83.6,22.2;83.5,22.0}"
 
 # --- Directories ---
-SCRATCH_BASE="${SLURM_TMPDIR:-/tmp}/charts_2min_${SLURM_JOB_ID:-manual}"
+# Determine scratch location:
+# 1. Explicit user override ($SCRATCH_DIR)
+# 2. Local SSD/NVMe $SLURM_TMPDIR (only if NOT on /dev/shm tmpfs, which consumes job RAM)
+# 3. Lustre $SCRATCH (Trillium / Compute Canada high-speed persistent scratch, e.g. /scratch/ferpb)
+# 4. Fallback to repo-local directory
+if [ -n "${SCRATCH_DIR:-}" ]; then
+    SCRATCH_BASE="${SCRATCH_DIR}/charts_2min_${SLURM_JOB_ID:-manual}"
+elif [ -n "${SLURM_TMPDIR:-}" ] && [[ "${SLURM_TMPDIR}" != /dev/shm* ]]; then
+    SCRATCH_BASE="${SLURM_TMPDIR}/charts_2min_${SLURM_JOB_ID:-manual}"
+elif [ -n "${SCRATCH:-}" ]; then
+    SCRATCH_BASE="${SCRATCH}/kotekan_scratch/charts_2min_${SLURM_JOB_ID:-manual}"
+else
+    SCRATCH_BASE="${REPO_ROOT}/scratch_charts_2min_${SLURM_JOB_ID:-manual}"
+fi
+
 PERM_OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/test_charts/data/2min_pipeline}"
 
 WIN15_DIR="${SCRATCH_BASE}/win15UTC"
@@ -177,26 +192,39 @@ else
     RFI_DESC="disabled"
 fi
 
+# Parse first beam target for primary tracking
+IFS=';' read -ra TARGET_ARRAY <<< "${BEAM_TARGETS}"
+FIRST_TARGET="${TARGET_ARRAY[0]}"
+IFS=',' read -ra RA_DEC <<< "${FIRST_TARGET}"
+PRIMARY_RA="${RA_DEC[0]:-83.633}"
+PRIMARY_DEC="${RA_DEC[1]:-22.014}"
+
 echo "======================================================================"
 echo " 3. Configuration:"
 echo "    Duration           : ${DURATION_S} s ($(( DURATION_S / 60 )) min)"
 echo "    Background Cadence : ${BG_CADENCE_S} s"
 echo "    Event Dense Span   : ${EVENT_DENSE_S} s"
+echo "    Event Sparse Step  : ${EVENT_SPARSE_CADENCE_MS} ms"
 echo "    Antennas           : ${ANTENNAS}"
 echo "    Frequency Channels : ${NUM_FREQ}"
 echo "    Samples/Frame      : ${SAMPLES_PER_FRAME}"
 echo "    Injected Events    : ${NUM_EVENTS} per window"
 echo "    Persistent RFI     : ${RFI_DESC} (amp ${RFI_AMP} LSB)"
 echo "    Max Beams          : ${MAX_BEAMS}"
+echo "    Primary Target     : RA=${PRIMARY_RA} deg, Dec=${PRIMARY_DEC} deg"
 echo "    Video Duration     : ${VIDEO_DURATION_S} s @ ${VIDEO_FPS} fps"
 echo "    Workers            : ${WORKERS}"
 echo "    Scratch Base       : ${SCRATCH_BASE}"
 echo "    Persistent Storage : ${PERM_OUTPUT_DIR}"
+if [[ "${SCRATCH_BASE}" == /dev/shm* ]]; then
+    echo "    [WARNING] Scratch Base is on /dev/shm (RAM tmpfs)! May trigger OOM if data exceeds RAM."
+fi
 echo "======================================================================"
 
 # ============================================================================
-# 4. Generate Window A: 15:00 UTC (Daytime, Sun UP at Caren)
+# PART I: WINDOW A (15:00 UTC - Daytime, Sun UP at Carén)
 # ============================================================================
+
 echo "======================================================================"
 echo " 4. Generating Window A: 15:00 UTC (Daytime, Sun UP)"
 echo "======================================================================"
@@ -205,6 +233,7 @@ python3 test_charts/generate_realistic_5min_windows.py \
     --duration-s "${DURATION_S}" \
     --background-cadence-s "${BG_CADENCE_S}" \
     --event-dense-s "${EVENT_DENSE_S}" \
+    --event-sparse-cadence-ms "${EVENT_SPARSE_CADENCE_MS}" \
     --antennas "${ANTENNAS}" \
     --num-freq "${NUM_FREQ}" \
     --samples-per-frame "${SAMPLES_PER_FRAME}" \
@@ -216,33 +245,8 @@ python3 test_charts/generate_realistic_5min_windows.py \
     --out-dir "${WIN15_DIR}" \
     --file-name "win15UTC_${ANTENNAS}ant"
 
-# ============================================================================
-# 5. Generate Window B: 03:00 UTC (Nighttime, Sun BELOW Horizon)
-# ============================================================================
 echo "======================================================================"
-echo " 5. Generating Window B: 03:00 UTC (Nighttime, Sun DOWN)"
-echo "======================================================================"
-python3 test_charts/generate_realistic_5min_windows.py \
-    --utc-hour 3 \
-    --duration-s "${DURATION_S}" \
-    --background-cadence-s "${BG_CADENCE_S}" \
-    --event-dense-s "${EVENT_DENSE_S}" \
-    --antennas "${ANTENNAS}" \
-    --num-freq "${NUM_FREQ}" \
-    --samples-per-frame "${SAMPLES_PER_FRAME}" \
-    --num-events "${NUM_EVENTS}" \
-    ${RFI_CHANNELS_ARG} \
-    ${RFI_FREQS_ARG} \
-    --persistent-rfi-amp "${RFI_AMP}" \
-    --workers "${WORKERS}" \
-    --out-dir "${WIN03_DIR}" \
-    --file-name "win03UTC_${ANTENNAS}ant"
-
-# ============================================================================
-# 6. Correlate Window A (15:00 UTC) via AstronCorrelator
-# ============================================================================
-echo "======================================================================"
-echo " 6. Correlating Window A (15:00 UTC) via Kotekan AstronCorrelator"
+echo " 5. Correlating Window A (15:00 UTC) via Kotekan AstronCorrelator"
 echo "======================================================================"
 python3 test_charts/run_5min_window_correlator.py \
     --window-dir "${WIN15_DIR}" \
@@ -253,38 +257,9 @@ python3 test_charts/run_5min_window_correlator.py \
     --samples-per-frame "${SAMPLES_PER_FRAME}" \
     --inspect-frames "auto"
 
-# ============================================================================
-# 7. Correlate Window B (03:00 UTC) via AstronCorrelator
-# ============================================================================
 echo "======================================================================"
-echo " 7. Correlating Window B (03:00 UTC) via Kotekan AstronCorrelator"
+echo " 6. Beam Tracker: Window A (15:00 UTC) — ${MAX_BEAMS} Beams"
 echo "======================================================================"
-python3 test_charts/run_5min_window_correlator.py \
-    --window-dir "${WIN03_DIR}" \
-    --file-name "win03UTC_${ANTENNAS}ant" \
-    --kotekan-bin "${KOTEKAN_BIN}" \
-    --antennas "${ANTENNAS}" \
-    --num-freq "${NUM_FREQ}" \
-    --samples-per-frame "${SAMPLES_PER_FRAME}" \
-    --inspect-frames "auto"
-
-# ============================================================================
-# 8. Beam Tracker: Window A (15:00 UTC)
-# ============================================================================
-echo "======================================================================"
-echo " 8. Beam Tracker: Window A (15:00 UTC) — ${MAX_BEAMS} Beams"
-echo "======================================================================"
-
-# Parse first beam target for primary tracking
-IFS=';' read -ra TARGET_ARRAY <<< "${BEAM_TARGETS}"
-FIRST_TARGET="${TARGET_ARRAY[0]}"
-IFS=',' read -ra RA_DEC <<< "${FIRST_TARGET}"
-PRIMARY_RA="${RA_DEC[0]:-83.633}"
-PRIMARY_DEC="${RA_DEC[1]:-22.014}"
-
-echo "    Primary beam target: RA=${PRIMARY_RA} deg, Dec=${PRIMARY_DEC} deg"
-echo "    All ${MAX_BEAMS} beam targets: ${BEAM_TARGETS}"
-
 python3 test_charts/run_beam_tracker_replay.py \
     --window-dir "${WIN15_DIR}" \
     --file-name "win15UTC_${ANTENNAS}ant" \
@@ -298,11 +273,110 @@ python3 test_charts/run_beam_tracker_replay.py \
     --source-dec-deg "${PRIMARY_DEC}" \
     --initial-lst-hours 5.575
 
-# ============================================================================
-# 9. Beam Tracker: Window B (03:00 UTC)
-# ============================================================================
 echo "======================================================================"
-echo " 9. Beam Tracker: Window B (03:00 UTC) — ${MAX_BEAMS} Beams"
+echo " 7. Generating Videos for Window A (15:00 UTC)"
+echo "======================================================================"
+echo "--- 7a. Baseband 8x8 Spectrogram Video ---"
+python3 test_charts/generate_pipeline_videos.py baseband \
+    --window-dir "${WIN15_DIR}" \
+    --base-name "win15UTC_${ANTENNAS}ant" \
+    --output "${WIN15_DIR}/videos/baseband_spectrogram_win15UTC.mp4" \
+    --antennas "${ANTENNAS}" \
+    --num-freq "${NUM_FREQ}" \
+    --samples-per-frame "${SAMPLES_PER_FRAME}" \
+    --duration-s "${VIDEO_DURATION_S}" \
+    --fps "${VIDEO_FPS}" \
+    2>&1 || echo "[WARNING] Baseband video generation failed for win15UTC"
+
+echo "--- 7b. Correlator Matrix Video ---"
+python3 test_charts/generate_pipeline_videos.py correlator \
+    --corr-dir "${WIN15_DIR}/correlator" \
+    --corr-name "corr_win15UTC_${ANTENNAS}ant" \
+    --output "${WIN15_DIR}/videos/correlator_matrix_win15UTC.mp4" \
+    --num-elements "${ANTENNAS}" \
+    --num-channels "${NUM_FREQ}" \
+    --duration-s "${VIDEO_DURATION_S}" \
+    --fps "${VIDEO_FPS}" \
+    2>&1 || echo "[WARNING] Correlator video generation failed for win15UTC"
+
+echo "--- 7c. Beam Tracker Output Video ---"
+python3 test_charts/generate_pipeline_videos.py tracker \
+    --tracker-dir "${WIN15_DIR}/tracker" \
+    --tracker-name "beams_win15UTC_${ANTENNAS}ant" \
+    --output "${WIN15_DIR}/videos/beam_tracker_win15UTC.mp4" \
+    --samples-per-data-set "${SAMPLES_PER_FRAME}" \
+    --num-freq "${NUM_FREQ}" \
+    --max-beams "${MAX_BEAMS}" \
+    --duration-s "${VIDEO_DURATION_S}" \
+    --fps "${VIDEO_FPS}" \
+    2>&1 || echo "[WARNING] Tracker video generation failed for win15UTC"
+
+echo "======================================================================"
+echo " 8. Archiving Window A Products to ${PERM_OUTPUT_DIR}/win15UTC"
+echo "======================================================================"
+cp -v "${WIN15_DIR}"/*_meta.h5 "${PERM_OUTPUT_DIR}/win15UTC/" 2>/dev/null || true
+cp -v "${WIN15_DIR}"/*_events.json "${PERM_OUTPUT_DIR}/win15UTC/" 2>/dev/null || true
+cp -rv "${WIN15_DIR}/plots" "${PERM_OUTPUT_DIR}/win15UTC/" 2>/dev/null || true
+cp -rv "${WIN15_DIR}/configs" "${PERM_OUTPUT_DIR}/win15UTC/" 2>/dev/null || true
+cp -rv "${WIN15_DIR}/videos" "${PERM_OUTPUT_DIR}/win15UTC/" 2>/dev/null || true
+
+if [ "${PERSIST_CORR_BIN:-0}" = "1" ]; then
+    echo " Copying correlation binary dumps for win15UTC..."
+    cp -rv "${WIN15_DIR}/correlator" "${PERM_OUTPUT_DIR}/win15UTC/"
+fi
+if [ "${PERSIST_TRACKER_BIN:-0}" = "1" ]; then
+    echo " Copying beam tracker binary dumps for win15UTC..."
+    cp -rv "${WIN15_DIR}/tracker" "${PERM_OUTPUT_DIR}/win15UTC/"
+fi
+if [ "${PERSIST_BASEBAND_BIN:-0}" = "1" ]; then
+    echo " Copying baseband binary dumps for win15UTC..."
+    cp -v "${WIN15_DIR}"/win15UTC_${ANTENNAS}ant_*.bin "${PERM_OUTPUT_DIR}/win15UTC/" 2>/dev/null || true
+fi
+
+# Optional cleanup of Window A raw baseband to save disk space
+if [ "${CLEANUP_BASEBAND:-0}" = "1" ]; then
+    echo " Cleaning up raw baseband frames for win15UTC to free scratch space..."
+    rm -f "${WIN15_DIR}"/win15UTC_${ANTENNAS}ant_*.bin
+fi
+
+# ============================================================================
+# PART II: WINDOW B (03:00 UTC - Nighttime, Sun BELOW Horizon)
+# ============================================================================
+
+echo "======================================================================"
+echo " 9. Generating Window B: 03:00 UTC (Nighttime, Sun DOWN)"
+echo "======================================================================"
+python3 test_charts/generate_realistic_5min_windows.py \
+    --utc-hour 3 \
+    --duration-s "${DURATION_S}" \
+    --background-cadence-s "${BG_CADENCE_S}" \
+    --event-dense-s "${EVENT_DENSE_S}" \
+    --event-sparse-cadence-ms "${EVENT_SPARSE_CADENCE_MS}" \
+    --antennas "${ANTENNAS}" \
+    --num-freq "${NUM_FREQ}" \
+    --samples-per-frame "${SAMPLES_PER_FRAME}" \
+    --num-events "${NUM_EVENTS}" \
+    ${RFI_CHANNELS_ARG} \
+    ${RFI_FREQS_ARG} \
+    --persistent-rfi-amp "${RFI_AMP}" \
+    --workers "${WORKERS}" \
+    --out-dir "${WIN03_DIR}" \
+    --file-name "win03UTC_${ANTENNAS}ant"
+
+echo "======================================================================"
+echo " 10. Correlating Window B (03:00 UTC) via Kotekan AstronCorrelator"
+echo "======================================================================"
+python3 test_charts/run_5min_window_correlator.py \
+    --window-dir "${WIN03_DIR}" \
+    --file-name "win03UTC_${ANTENNAS}ant" \
+    --kotekan-bin "${KOTEKAN_BIN}" \
+    --antennas "${ANTENNAS}" \
+    --num-freq "${NUM_FREQ}" \
+    --samples-per-frame "${SAMPLES_PER_FRAME}" \
+    --inspect-frames "auto"
+
+echo "======================================================================"
+echo " 11. Beam Tracker: Window B (03:00 UTC) — ${MAX_BEAMS} Beams"
 echo "======================================================================"
 python3 test_charts/run_beam_tracker_replay.py \
     --window-dir "${WIN03_DIR}" \
@@ -317,60 +391,10 @@ python3 test_charts/run_beam_tracker_replay.py \
     --source-dec-deg "${PRIMARY_DEC}" \
     --initial-lst-hours 17.5
 
-# ============================================================================
-# 10. Generate Videos: Window A (15:00 UTC)
-# ============================================================================
 echo "======================================================================"
-echo " 10. Generating Videos for Window A (15:00 UTC)"
+echo " 12. Generating Videos for Window B (03:00 UTC)"
 echo "======================================================================"
-
-# 10a. Baseband 8x8 spectrogram video
-echo "--- 10a. Baseband 8x8 Spectrogram Video ---"
-python3 test_charts/generate_pipeline_videos.py baseband \
-    --window-dir "${WIN15_DIR}" \
-    --base-name "win15UTC_${ANTENNAS}ant" \
-    --output "${WIN15_DIR}/videos/baseband_spectrogram_win15UTC.mp4" \
-    --antennas "${ANTENNAS}" \
-    --num-freq "${NUM_FREQ}" \
-    --samples-per-frame "${SAMPLES_PER_FRAME}" \
-    --duration-s "${VIDEO_DURATION_S}" \
-    --fps "${VIDEO_FPS}" \
-    2>&1 || echo "[WARNING] Baseband video generation failed for win15UTC"
-
-# 10b. Correlator matrix video
-echo "--- 10b. Correlator Matrix Video ---"
-python3 test_charts/generate_pipeline_videos.py correlator \
-    --corr-dir "${WIN15_DIR}/correlator" \
-    --corr-name "corr_win15UTC_${ANTENNAS}ant" \
-    --output "${WIN15_DIR}/videos/correlator_matrix_win15UTC.mp4" \
-    --num-elements "${ANTENNAS}" \
-    --num-channels "${NUM_FREQ}" \
-    --duration-s "${VIDEO_DURATION_S}" \
-    --fps "${VIDEO_FPS}" \
-    2>&1 || echo "[WARNING] Correlator video generation failed for win15UTC"
-
-# 10c. Beam tracker output video
-echo "--- 10c. Beam Tracker Output Video ---"
-python3 test_charts/generate_pipeline_videos.py tracker \
-    --tracker-dir "${WIN15_DIR}/tracker" \
-    --tracker-name "beams_win15UTC_${ANTENNAS}ant" \
-    --output "${WIN15_DIR}/videos/beam_tracker_win15UTC.mp4" \
-    --samples-per-data-set "${SAMPLES_PER_FRAME}" \
-    --num-freq "${NUM_FREQ}" \
-    --max-beams "${MAX_BEAMS}" \
-    --duration-s "${VIDEO_DURATION_S}" \
-    --fps "${VIDEO_FPS}" \
-    2>&1 || echo "[WARNING] Tracker video generation failed for win15UTC"
-
-# ============================================================================
-# 11. Generate Videos: Window B (03:00 UTC)
-# ============================================================================
-echo "======================================================================"
-echo " 11. Generating Videos for Window B (03:00 UTC)"
-echo "======================================================================"
-
-# 11a. Baseband 8x8 spectrogram video
-echo "--- 11a. Baseband 8x8 Spectrogram Video ---"
+echo "--- 12a. Baseband 8x8 Spectrogram Video ---"
 python3 test_charts/generate_pipeline_videos.py baseband \
     --window-dir "${WIN03_DIR}" \
     --base-name "win03UTC_${ANTENNAS}ant" \
@@ -382,8 +406,7 @@ python3 test_charts/generate_pipeline_videos.py baseband \
     --fps "${VIDEO_FPS}" \
     2>&1 || echo "[WARNING] Baseband video generation failed for win03UTC"
 
-# 11b. Correlator matrix video
-echo "--- 11b. Correlator Matrix Video ---"
+echo "--- 12b. Correlator Matrix Video ---"
 python3 test_charts/generate_pipeline_videos.py correlator \
     --corr-dir "${WIN03_DIR}/correlator" \
     --corr-name "corr_win03UTC_${ANTENNAS}ant" \
@@ -394,8 +417,7 @@ python3 test_charts/generate_pipeline_videos.py correlator \
     --fps "${VIDEO_FPS}" \
     2>&1 || echo "[WARNING] Correlator video generation failed for win03UTC"
 
-# 11c. Beam tracker output video
-echo "--- 11c. Beam Tracker Output Video ---"
+echo "--- 12c. Beam Tracker Output Video ---"
 python3 test_charts/generate_pipeline_videos.py tracker \
     --tracker-dir "${WIN03_DIR}/tracker" \
     --tracker-name "beams_win03UTC_${ANTENNAS}ant" \
@@ -407,44 +429,32 @@ python3 test_charts/generate_pipeline_videos.py tracker \
     --fps "${VIDEO_FPS}" \
     2>&1 || echo "[WARNING] Tracker video generation failed for win03UTC"
 
-# ============================================================================
-# 12. Archive Products to Persistent Storage
-# ============================================================================
 echo "======================================================================"
-echo " 12. Archiving Products to ${PERM_OUTPUT_DIR}"
+echo " 13. Archiving Window B Products to ${PERM_OUTPUT_DIR}/win03UTC"
 echo "======================================================================"
-
-# Window A
-cp -v "${WIN15_DIR}"/*_meta.h5 "${PERM_OUTPUT_DIR}/win15UTC/" 2>/dev/null || true
-cp -v "${WIN15_DIR}"/*_events.json "${PERM_OUTPUT_DIR}/win15UTC/" 2>/dev/null || true
-cp -rv "${WIN15_DIR}/plots" "${PERM_OUTPUT_DIR}/win15UTC/" 2>/dev/null || true
-cp -rv "${WIN15_DIR}/configs" "${PERM_OUTPUT_DIR}/win15UTC/" 2>/dev/null || true
-cp -rv "${WIN15_DIR}/videos" "${PERM_OUTPUT_DIR}/win15UTC/" 2>/dev/null || true
-
-# Window B
 cp -v "${WIN03_DIR}"/*_meta.h5 "${PERM_OUTPUT_DIR}/win03UTC/" 2>/dev/null || true
 cp -v "${WIN03_DIR}"/*_events.json "${PERM_OUTPUT_DIR}/win03UTC/" 2>/dev/null || true
 cp -rv "${WIN03_DIR}/plots" "${PERM_OUTPUT_DIR}/win03UTC/" 2>/dev/null || true
 cp -rv "${WIN03_DIR}/configs" "${PERM_OUTPUT_DIR}/win03UTC/" 2>/dev/null || true
 cp -rv "${WIN03_DIR}/videos" "${PERM_OUTPUT_DIR}/win03UTC/" 2>/dev/null || true
 
-# Optional: persist large binary outputs
 if [ "${PERSIST_CORR_BIN:-0}" = "1" ]; then
-    echo " Copying correlation binary dumps to persistent storage..."
-    cp -rv "${WIN15_DIR}/correlator" "${PERM_OUTPUT_DIR}/win15UTC/"
+    echo " Copying correlation binary dumps for win03UTC..."
     cp -rv "${WIN03_DIR}/correlator" "${PERM_OUTPUT_DIR}/win03UTC/"
 fi
-
 if [ "${PERSIST_TRACKER_BIN:-0}" = "1" ]; then
-    echo " Copying beam tracker binary dumps to persistent storage..."
-    cp -rv "${WIN15_DIR}/tracker" "${PERM_OUTPUT_DIR}/win15UTC/"
+    echo " Copying beam tracker binary dumps for win03UTC..."
     cp -rv "${WIN03_DIR}/tracker" "${PERM_OUTPUT_DIR}/win03UTC/"
 fi
-
 if [ "${PERSIST_BASEBAND_BIN:-0}" = "1" ]; then
-    echo " Copying baseband binary dumps to persistent storage..."
-    cp -v "${WIN15_DIR}"/win15UTC_${ANTENNAS}ant_*.bin "${PERM_OUTPUT_DIR}/win15UTC/" 2>/dev/null || true
+    echo " Copying baseband binary dumps for win03UTC..."
     cp -v "${WIN03_DIR}"/win03UTC_${ANTENNAS}ant_*.bin "${PERM_OUTPUT_DIR}/win03UTC/" 2>/dev/null || true
+fi
+
+# Optional cleanup of Window B raw baseband to save disk space
+if [ "${CLEANUP_BASEBAND:-0}" = "1" ]; then
+    echo " Cleaning up raw baseband frames for win03UTC to free scratch space..."
+    rm -f "${WIN03_DIR}"/win03UTC_${ANTENNAS}ant_*.bin
 fi
 
 # ============================================================================

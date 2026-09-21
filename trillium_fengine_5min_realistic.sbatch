@@ -124,7 +124,22 @@ WORKERS="${SLURM_CPUS_PER_TASK:-16}"
 PERSISTENT_RFI_CHANNELS="${PERSISTENT_RFI_CHANNELS:-94,133,147}"
 PERSISTENT_RFI_AMP="${PERSISTENT_RFI_AMP:-7.0}"
 
-SCRATCH_BASE="${SLURM_TMPDIR:-/tmp}/charts_windows_${SLURM_JOB_ID:-manual}"
+# --- Directories ---
+# Determine scratch location:
+# 1. Explicit user override ($SCRATCH_DIR)
+# 2. Local SSD/NVMe $SLURM_TMPDIR (only if NOT on /dev/shm tmpfs, which consumes job RAM)
+# 3. Lustre $SCRATCH (Trillium / Compute Canada high-speed persistent scratch, e.g. /scratch/ferpb)
+# 4. Fallback to repo-local directory
+if [ -n "${SCRATCH_DIR:-}" ]; then
+    SCRATCH_BASE="${SCRATCH_DIR}/charts_windows_${SLURM_JOB_ID:-manual}"
+elif [ -n "${SLURM_TMPDIR:-}" ] && [[ "${SLURM_TMPDIR}" != /dev/shm* ]]; then
+    SCRATCH_BASE="${SLURM_TMPDIR}/charts_windows_${SLURM_JOB_ID:-manual}"
+elif [ -n "${SCRATCH:-}" ]; then
+    SCRATCH_BASE="${SCRATCH}/kotekan_scratch/charts_windows_${SLURM_JOB_ID:-manual}"
+else
+    SCRATCH_BASE="${REPO_ROOT}/scratch_charts_windows_${SLURM_JOB_ID:-manual}"
+fi
+
 PERM_OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/test_charts/data/5min_windows}"
 
 WIN15_DIR="${SCRATCH_BASE}/win15UTC"
