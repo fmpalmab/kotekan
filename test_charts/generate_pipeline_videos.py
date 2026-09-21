@@ -2,7 +2,7 @@
 """
 CHARTS Pipeline Video Generator
 ================================
-Generates 30-second MP4 videos from CHARTS pipeline outputs:
+Generates 2-minute (120-second) MP4 videos from CHARTS pipeline outputs (covering the full window):
   1. Baseband 8x8 spectrogram video  — frequency power per antenna over time
   2. Correlator matrix video         — 64x64 visibility matrix evolution
   3. Beam tracker output video       — formed beam power over time/frequency
@@ -147,7 +147,6 @@ def load_beam_tracker_frame(
 
 
 # ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
 # Video 1: Baseband Frequency Power Line Spectrum Video
 # ---------------------------------------------------------------------------
 def generate_baseband_spectrogram_video(
@@ -157,7 +156,7 @@ def generate_baseband_spectrogram_video(
     num_antennas: int = 64,
     num_freq: int = 672,
     samples_per_frame: int = 1536,
-    duration_s: float = 30.0,
+    duration_s: float = 120.0,
     fps: int = 10,
     max_frames: Optional[int] = None,
 ):
@@ -175,22 +174,26 @@ def generate_baseband_spectrogram_video(
     total_available = len(bin_files)
     if max_frames:
         bin_files = bin_files[:max_frames]
+        total_available = len(bin_files)
 
-    # Subsample to fit duration
+    # Ensure the video spans the full window duration (duration_s seconds at given fps)
     total_video_frames = int(duration_s * fps)
-    if len(bin_files) > total_video_frames:
-        step = len(bin_files) / total_video_frames
-        indices = [int(i * step) for i in range(total_video_frames)]
-        bin_files = [bin_files[i] for i in indices]
+    if total_available > 0:
+        indices = np.linspace(0, total_available - 1, total_video_frames).astype(int)
+        sampled_files = [bin_files[i] for i in indices]
     else:
-        total_video_frames = len(bin_files)
+        sampled_files = []
+        total_video_frames = 0
 
-    print(f"  Baseband video: {total_video_frames} frames from {total_available} available (line-graph mode)")
+    print(
+        f"  Baseband video: {total_video_frames} frames ({duration_s:.1f} s @ {fps} fps) "
+        f"sampled across {total_available} files spanning the entire window"
+    )
 
     freq_mhz = DEFAULT_FREQUENCY_START_MHZ + np.arange(num_freq) * CHARTS_CHANNEL_WIDTH_MHZ
 
     # Compute baseline from first frame
-    first_volts = load_baseband_frame(bin_files[0], num_antennas, num_freq, samples_per_frame)
+    first_volts = load_baseband_frame(sampled_files[0], num_antennas, num_freq, samples_per_frame)
     first_spec = compute_baseband_spectrogram(first_volts, num_antennas)  # (antennas, freq) in dB
     first_mean = np.mean(first_spec, axis=0)
 
@@ -260,7 +263,7 @@ def generate_baseband_spectrogram_video(
     time_text = fig.text(0.5, 0.015, "", ha="center", fontsize=12, color="cyan")
 
     def update(frame_idx):
-        volts = load_baseband_frame(bin_files[frame_idx], num_antennas, num_freq, samples_per_frame)
+        volts = load_baseband_frame(sampled_files[frame_idx], num_antennas, num_freq, samples_per_frame)
         spec = compute_baseband_spectrogram(volts, num_antennas)
         cur_mean = np.mean(spec, axis=0)
 
@@ -273,7 +276,14 @@ def generate_baseband_spectrogram_video(
             ant_lines[a].set_ydata(spec[a])
 
         t_s = frame_idx * (duration_s / max(1, total_video_frames))
-        time_text.set_text(f"Frame {frame_idx}/{total_video_frames}  |  t ≈ {t_s:.1f} s")
+        mins = int(t_s // 60)
+        secs = int(t_s % 60)
+        tot_mins = int(duration_s // 60)
+        tot_secs = int(duration_s % 60)
+        time_text.set_text(
+            f"Frame {frame_idx + 1}/{total_video_frames}  |  "
+            f"Window Time: {mins:02d}:{secs:02d} / {tot_mins:02d}:{tot_secs:02d} ({t_s:.1f}s / {duration_s:.0f}s)"
+        )
         return [mean_line, peak_dot, peak_text, time_text] + ant_lines
 
     anim = animation.FuncAnimation(fig, update, frames=total_video_frames, blit=False)
@@ -358,7 +368,7 @@ def generate_correlator_video(
     output_path: Path,
     num_elements: int = 64,
     num_channels: int = 672,
-    duration_s: float = 30.0,
+    duration_s: float = 120.0,
     fps: int = 10,
     freq_channel_idx: Optional[int] = None,
     freq_channels: Optional[List[int]] = None,
@@ -380,14 +390,16 @@ def generate_correlator_video(
     total_available = len(bin_files)
     if max_frames:
         bin_files = bin_files[:max_frames]
+        total_available = len(bin_files)
 
+    # Ensure the video spans the full window duration (duration_s seconds at given fps)
     total_video_frames = int(duration_s * fps)
-    if len(bin_files) > total_video_frames:
-        step = len(bin_files) / total_video_frames
-        indices = [int(i * step) for i in range(total_video_frames)]
-        bin_files = [bin_files[i] for i in indices]
+    if total_available > 0:
+        indices = np.linspace(0, total_available - 1, total_video_frames).astype(int)
+        sampled_files = [bin_files[i] for i in indices]
     else:
-        total_video_frames = len(bin_files)
+        sampled_files = []
+        total_video_frames = 0
 
     # Determine frequency channels to visualize
     if freq_channels and len(freq_channels) >= 2:
@@ -401,13 +413,16 @@ def generate_correlator_video(
     freqs_mhz = [DEFAULT_FREQUENCY_START_MHZ + ch * CHARTS_CHANNEL_WIDTH_MHZ for ch in channels_to_plot]
 
     # Load first frame for color scales
-    first_vis = load_correlator_frame(bin_files[0], num_elements, num_channels)
+    first_vis = load_correlator_frame(sampled_files[0], num_elements, num_channels)
 
     if len(channels_to_plot) >= 2:
         ch_A, ch_B = channels_to_plot[0], channels_to_plot[1]
         freq_A, freq_B = freqs_mhz[0], freqs_mhz[1]
 
-        print(f"  Correlator video (2-channel mode): {total_video_frames} frames")
+        print(
+            f"  Correlator video (2-channel mode): {total_video_frames} frames ({duration_s:.1f} s @ {fps} fps) "
+            f"spanning the full window from {total_available} files"
+        )
         print(f"    Channel A (Active) : Ch {ch_A} ({freq_A:.1f} MHz)")
         print(f"    Channel B (Quiet)  : Ch {ch_B} ({freq_B:.1f} MHz)")
 
@@ -472,14 +487,21 @@ def generate_correlator_video(
         fig.tight_layout(rect=[0, 0.04, 1, 0.94])
 
         def update(frame_idx):
-            vis = load_correlator_frame(bin_files[frame_idx], num_elements, num_channels)
+            vis = load_correlator_frame(sampled_files[frame_idx], num_elements, num_channels)
             im_mag_0.set_data(np.abs(vis[ch_A]))
             im_ph_0.set_data(np.angle(vis[ch_A]))
             im_mag_1.set_data(np.abs(vis[ch_B]))
             im_ph_1.set_data(np.angle(vis[ch_B]))
 
             t_s = frame_idx * (duration_s / max(1, total_video_frames))
-            time_text.set_text(f"Frame {frame_idx}/{total_video_frames}  |  t ≈ {t_s:.1f} s")
+            mins = int(t_s // 60)
+            secs = int(t_s % 60)
+            tot_mins = int(duration_s // 60)
+            tot_secs = int(duration_s % 60)
+            time_text.set_text(
+                f"Frame {frame_idx + 1}/{total_video_frames}  |  "
+                f"Window Time: {mins:02d}:{secs:02d} / {tot_mins:02d}:{tot_secs:02d} ({t_s:.1f}s / {duration_s:.0f}s)"
+            )
             return [im_mag_0, im_ph_0, im_mag_1, im_ph_1, time_text]
 
         anim = animation.FuncAnimation(fig, update, frames=total_video_frames, blit=False)
@@ -529,12 +551,23 @@ def generate_single_channel_correlator_video(
     output_path: Path,
     num_elements: int,
     num_channels: int,
-    duration_s: float,
-    fps: int,
-    total_video_frames: int,
+    duration_s: float = 120.0,
+    fps: int = 10,
+    total_video_frames: Optional[int] = None,
 ):
     """Renders a 1-channel |V_ij| + arg(V_ij) correlator matrix video."""
-    first_vis = load_correlator_frame(bin_files[0], num_elements, num_channels)
+    total_available = len(bin_files)
+    if total_video_frames is None:
+        total_video_frames = int(duration_s * fps)
+
+    if total_available > 0:
+        indices = np.linspace(0, total_available - 1, total_video_frames).astype(int)
+        sampled_files = [bin_files[i] for i in indices]
+    else:
+        sampled_files = []
+        total_video_frames = 0
+
+    first_vis = load_correlator_frame(sampled_files[0], num_elements, num_channels)
     first_mag = np.abs(first_vis[ch])
     vmin = 0.0
     vmax = float(np.percentile(first_mag, 99.5))
@@ -568,13 +601,20 @@ def generate_single_channel_correlator_video(
     fig.tight_layout(rect=[0, 0.05, 1, 0.93])
 
     def update(frame_idx):
-        vis = load_correlator_frame(bin_files[frame_idx], num_elements, num_channels)
+        vis = load_correlator_frame(sampled_files[frame_idx], num_elements, num_channels)
         mag = np.abs(vis[ch])
         phase = np.angle(vis[ch])
         im_mag.set_data(mag)
         im_ph.set_data(phase)
         t_s = frame_idx * (duration_s / max(1, total_video_frames))
-        time_text.set_text(f"Frame {frame_idx}/{total_video_frames}  |  t ≈ {t_s:.1f} s")
+        mins = int(t_s // 60)
+        secs = int(t_s % 60)
+        tot_mins = int(duration_s // 60)
+        tot_secs = int(duration_s % 60)
+        time_text.set_text(
+            f"Frame {frame_idx + 1}/{total_video_frames}  |  "
+            f"Window Time: {mins:02d}:{secs:02d} / {tot_mins:02d}:{tot_secs:02d} ({t_s:.1f}s / {duration_s:.0f}s)"
+        )
         return [im_mag, im_ph, time_text]
 
     anim = animation.FuncAnimation(fig, update, frames=total_video_frames, blit=False)
@@ -595,7 +635,7 @@ def generate_beam_tracker_video(
     samples_per_data_set: int = 1536,
     num_freq: int = 672,
     max_beams: int = 8,
-    duration_s: float = 30.0,
+    duration_s: float = 120.0,
     fps: int = 10,
     max_frames: Optional[int] = None,
     beam_targets_str: Optional[str] = None,
@@ -614,16 +654,21 @@ def generate_beam_tracker_video(
     total_available = len(bin_files)
     if max_frames:
         bin_files = bin_files[:max_frames]
+        total_available = len(bin_files)
 
+    # Ensure the video spans the full window duration (duration_s seconds at given fps)
     total_video_frames = int(duration_s * fps)
-    if len(bin_files) > total_video_frames:
-        step = len(bin_files) / total_video_frames
-        indices = [int(i * step) for i in range(total_video_frames)]
-        bin_files = [bin_files[i] for i in indices]
+    if total_available > 0:
+        indices = np.linspace(0, total_available - 1, total_video_frames).astype(int)
+        sampled_files = [bin_files[i] for i in indices]
     else:
-        total_video_frames = len(bin_files)
+        sampled_files = []
+        total_video_frames = 0
 
-    print(f"  Tracker video: {total_video_frames} frames from {total_available} available, {max_beams} beams")
+    print(
+        f"  Tracker video: {total_video_frames} frames ({duration_s:.1f} s @ {fps} fps) "
+        f"spanning the full window from {total_available} files, {max_beams} beams"
+    )
 
     freq_mhz = DEFAULT_FREQUENCY_START_MHZ + np.arange(num_freq) * CHARTS_CHANNEL_WIDTH_MHZ
 
@@ -665,7 +710,7 @@ def generate_beam_tracker_video(
         vibrant_colors.append(plt.cm.tab10(len(vibrant_colors) % 10))
 
     # Load first frame for setup
-    first_beams = load_beam_tracker_frame(bin_files[0], samples_per_data_set, num_freq, max_beams)
+    first_beams = load_beam_tracker_frame(sampled_files[0], samples_per_data_set, num_freq, max_beams)
     first_power = np.mean(np.abs(first_beams) ** 2, axis=0)  # (freq, beams)
 
     fig, axes = plt.subplots(2, 1, figsize=(16, 10), facecolor="#0a0a1a",
@@ -728,7 +773,7 @@ def generate_beam_tracker_video(
     fig.tight_layout(rect=[0, 0.04, 1, 0.95])
 
     def update(frame_idx):
-        beams = load_beam_tracker_frame(bin_files[frame_idx], samples_per_data_set, num_freq, max_beams)
+        beams = load_beam_tracker_frame(sampled_files[frame_idx], samples_per_data_set, num_freq, max_beams)
         power = np.mean(np.abs(beams) ** 2, axis=0)  # (freq, beams)
         for b in range(max_beams):
             lines[b].set_ydata(10 * np.log10(power[:, b] + 1e-12))
@@ -736,7 +781,14 @@ def generate_beam_tracker_video(
         for b, bar in enumerate(bars):
             bar.set_height(10 * np.log10(cur_integ[b] + 1e-12))
         t_s = frame_idx * (duration_s / max(1, total_video_frames))
-        time_text.set_text(f"Frame {frame_idx}/{total_video_frames}  |  t ≈ {t_s:.1f} s")
+        mins = int(t_s // 60)
+        secs = int(t_s % 60)
+        tot_mins = int(duration_s // 60)
+        tot_secs = int(duration_s % 60)
+        time_text.set_text(
+            f"Frame {frame_idx + 1}/{total_video_frames}  |  "
+            f"Window Time: {mins:02d}:{secs:02d} / {tot_mins:02d}:{tot_secs:02d} ({t_s:.1f}s / {duration_s:.0f}s)"
+        )
         return lines + list(bars) + [time_text]
 
     anim = animation.FuncAnimation(fig, update, frames=total_video_frames, blit=False)
@@ -762,7 +814,7 @@ def main():
     p_bb.add_argument("--antennas", type=int, default=64)
     p_bb.add_argument("--num-freq", type=int, default=672)
     p_bb.add_argument("--samples-per-frame", type=int, default=1536)
-    p_bb.add_argument("--duration-s", type=float, default=30.0)
+    p_bb.add_argument("--duration-s", type=float, default=120.0, help="Video duration in seconds (default: 120.0 = 2 minutes)")
     p_bb.add_argument("--fps", type=int, default=10)
     p_bb.add_argument("--max-frames", type=int, default=None)
 
@@ -773,7 +825,7 @@ def main():
     p_corr.add_argument("--output", type=str, required=True)
     p_corr.add_argument("--num-elements", type=int, default=64)
     p_corr.add_argument("--num-channels", type=int, default=672)
-    p_corr.add_argument("--duration-s", type=float, default=30.0)
+    p_corr.add_argument("--duration-s", type=float, default=120.0, help="Video duration in seconds (default: 120.0 = 2 minutes)")
     p_corr.add_argument("--fps", type=int, default=10)
     p_corr.add_argument("--freq-channel", type=int, default=None, help="Single frequency channel index")
     p_corr.add_argument("--freq-channels", type=str, default=None, help="Comma-separated frequency channels or 'auto'")
@@ -788,7 +840,7 @@ def main():
     p_trk.add_argument("--samples-per-data-set", type=int, default=1536)
     p_trk.add_argument("--num-freq", type=int, default=672)
     p_trk.add_argument("--max-beams", type=int, default=8)
-    p_trk.add_argument("--duration-s", type=float, default=30.0)
+    p_trk.add_argument("--duration-s", type=float, default=120.0, help="Video duration in seconds (default: 120.0 = 2 minutes)")
     p_trk.add_argument("--fps", type=int, default=10)
     p_trk.add_argument("--beam-targets", type=str, default=None, help="Semicolon-separated target names/coordinates")
     p_trk.add_argument("--max-frames", type=int, default=None)

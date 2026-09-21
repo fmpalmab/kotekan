@@ -141,7 +141,7 @@ MAX_BEAMS="${MAX_BEAMS:-8}"                  # 8 formed beams
 INTEGRATION_SPECTRA="${INTEGRATION_SPECTRA:-320}"
 
 # --- Video ---
-VIDEO_DURATION_S="${VIDEO_DURATION_S:-30}"   # 30-second videos
+VIDEO_DURATION_S="${VIDEO_DURATION_S:-${DURATION_S:-120}}"   # Full 2-minute window videos
 VIDEO_FPS="${VIDEO_FPS:-10}"
 
 # --- Workers ---
@@ -208,7 +208,7 @@ echo "    Persistent RFI     : ${RFI_DESC} (amp ${RFI_AMP} LSB)"
 echo "    Max Beams          : ${MAX_BEAMS}"
 echo "    Window A Targets   : ${BEAM_TARGETS_WIN15}"
 echo "    Window B Targets   : ${BEAM_TARGETS_WIN03}"
-echo "    Video Duration     : ${VIDEO_DURATION_S} s @ ${VIDEO_FPS} fps"
+echo "    Video Duration     : ${VIDEO_DURATION_S} s @ ${VIDEO_FPS} fps (full window)"
 echo "    Workers            : ${WORKERS}"
 echo "    Scratch Base       : ${SCRATCH_BASE}"
 echo "    Persistent Storage : ${PERM_OUTPUT_DIR}"
