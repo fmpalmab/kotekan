@@ -308,6 +308,13 @@ python3 test_charts/generate_pipeline_videos.py tracker \
     --beam-targets "${BEAM_TARGETS_WIN15}" \
     2>&1 || echo "[WARNING] Tracker video generation failed for win15UTC"
 
+echo "--- 7d. CASM Correlation Matrix Waterfall Plot (16 Antennas) ---"
+python3 test_charts/visualize_charts_casm_correlation_matrix.py \
+    --corr-dir "${WIN15_DIR}/correlator" \
+    --num-antennas 16 \
+    --output "${WIN15_DIR}/plots/casm_correlation_matrix_win15UTC_16ant.png" \
+    2>&1 || echo "[WARNING] CASM plot generation failed for win15UTC"
+
 echo "======================================================================"
 echo " 8. Archiving Window A Products to ${PERM_OUTPUT_DIR}/win15UTC"
 echo "======================================================================"
@@ -426,6 +433,13 @@ python3 test_charts/generate_pipeline_videos.py tracker \
     --fps "${VIDEO_FPS}" \
     --beam-targets "${BEAM_TARGETS_WIN03}" \
     2>&1 || echo "[WARNING] Tracker video generation failed for win03UTC"
+
+echo "--- 12d. CASM Correlation Matrix Waterfall Plot (16 Antennas) ---"
+python3 test_charts/visualize_charts_casm_correlation_matrix.py \
+    --corr-dir "${WIN03_DIR}/correlator" \
+    --num-antennas 16 \
+    --output "${WIN03_DIR}/plots/casm_correlation_matrix_win03UTC_16ant.png" \
+    2>&1 || echo "[WARNING] CASM plot generation failed for win03UTC"
 
 echo "======================================================================"
 echo " 13. Archiving Window B Products to ${PERM_OUTPUT_DIR}/win03UTC"
