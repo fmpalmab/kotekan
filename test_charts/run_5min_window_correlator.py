@@ -48,7 +48,7 @@ def create_window_replay_yaml(
     num_frames: int,
     samples_per_data_set: int = 1536,
     num_elements: int = 64,
-    num_local_freq: int = 336,
+    num_local_freq: int = 672,
     buffer_depth: int = 4,
 ):
     """Writes Kotekan YAML configuration for rawFileRead -> cudaCorrelatorAstron -> rawFileWrite."""
@@ -248,7 +248,7 @@ def run_window_correlator(
     plots_dir: Optional[Path] = None,
     configs_dir: Optional[Path] = None,
     num_antennas: int = 64,
-    num_freq: int = 336,
+    num_freq: int = 672,
     samples_per_frame: int = 1536,
     inspect_frames_arg: str = "auto",
 ):
@@ -382,7 +382,7 @@ def main():
     parser.add_argument("--plots-dir", type=str, default=None, help="Output directory for diagnostic plots")
     parser.add_argument("--configs-dir", type=str, default=None, help="Output directory for generated YAML configs")
     parser.add_argument("--antennas", type=int, default=64, help="Number of antennas (default: 64)")
-    parser.add_argument("--num-freq", type=int, default=336, help="Frequency channels (default: 336)")
+    parser.add_argument("--num-freq", type=int, default=672, help="Frequency channels (default: 672)")
     parser.add_argument("--samples-per-frame", type=int, default=1536, help="Samples per frame (default: 1536)")
     parser.add_argument(
         "--inspect-frames",

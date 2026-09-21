@@ -594,7 +594,7 @@ def generate_5min_window(
     date_str: str = "2026-03-20",
     duration_s: float = 300.0,
     antennas: int = 64,
-    num_freq: int = 336,
+    num_freq: int = 672,
     samples_per_frame: int = 1536,
     background_cadence_s: float = 2.0,
     event_dense_s: float = 1.0,
@@ -825,7 +825,7 @@ def main():
     parser.add_argument("--date", type=str, default="2026-03-20", help="Observation date YYYY-MM-DD")
     parser.add_argument("--duration-s", type=float, default=300.0, help="Window duration in seconds (default: 300)")
     parser.add_argument("--antennas", type=int, default=64, help="Number of antennas (default: 64)")
-    parser.add_argument("--num-freq", type=int, default=336, help="Frequency channels (default: 336)")
+    parser.add_argument("--num-freq", type=int, default=672, help="Frequency channels (default: 672)")
     parser.add_argument("--samples-per-frame", type=int, default=1536, help="Samples per frame (default: 1536)")
     parser.add_argument("--background-cadence-s", type=float, default=2.0, help="Background frame cadence (s)")
     parser.add_argument("--event-dense-s", type=float, default=1.0, help="Dense capture duration around events (s)")

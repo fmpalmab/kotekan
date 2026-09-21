@@ -121,18 +121,19 @@ EVENT_SPARSE_CADENCE_MS="${EVENT_SPARSE_CADENCE_MS:-100.0}" # Sparse capture cad
 
 # --- Array geometry ---
 ANTENNAS="${ANTENNAS:-64}"
-NUM_FREQ="${NUM_FREQ:-336}"
+NUM_FREQ="${NUM_FREQ:-672}"
 SAMPLES_PER_FRAME="${SAMPLES_PER_FRAME:-1536}"
 
 # --- Events ---
 NUM_EVENTS="${NUM_EVENTS:-8}"                # 8 random transient events
 
-# --- Persistent RFI (frequency-selectable) ---
+# --- Persistent RFI (frequency-selectable across full 300-501.6 MHz band) ---
 # Specify by channel indices OR by frequency in MHz.
 # If RFI_FREQS_MHZ is set, it overrides RFI_CHANNELS.
 # Set to "none" to disable persistent RFI entirely.
-RFI_CHANNELS="${RFI_CHANNELS:-94,133,147}"   # Channel indices (300 + ch*0.3 MHz)
-RFI_FREQS_MHZ="${RFI_FREQS_MHZ:-}"           # e.g. "328.2,339.9,344.1" (overrides channels)
+# Channels 94 (328.2 MHz), 133 (339.9 MHz), 147 (344.1 MHz), 450 (435.0 MHz)
+RFI_CHANNELS="${RFI_CHANNELS:-94,133,147,450}"   # Channel indices (300 + ch*0.3 MHz)
+RFI_FREQS_MHZ="${RFI_FREQS_MHZ:-}"           # e.g. "328.2,339.9,344.1,435.0" (overrides channels)
 RFI_AMP="${RFI_AMP:-7.0}"                    # Amplitude in LSB
 
 # --- Beam tracker ---
@@ -146,13 +147,12 @@ VIDEO_FPS="${VIDEO_FPS:-10}"
 # --- Workers ---
 WORKERS="${SLURM_CPUS_PER_TASK:-16}"
 
-# --- Beam targets (RA/Dec for 8 beams) ---
-# --- Beam targets (RA/Dec with object names for 8 beams) ---
-# Window A (15:00 UTC, LST ~5.575h): Crab Pulsar (PSR B0531+21) + 7 spatial offset beams
-BEAM_TARGETS_WIN15="${BEAM_TARGETS_WIN15:-Crab Pulsar:83.633,22.014;Crab East:83.700,22.100;Crab West:83.500,21.900;Crab North:83.800,22.000;Crab South:83.400,22.100;Crab NE:83.900,21.800;Crab NW:83.600,22.200;Crab SE:83.500,22.000}"
+# --- Beam targets (RA/Dec with object names for 8 distinct celestial sources) ---
+# Window A (15:00 UTC, LST ~5.575h, site lat -33.42°): 8 distinct celestial sources
+BEAM_TARGETS_WIN15="${BEAM_TARGETS_WIN15:-Crab Pulsar:83.633,22.014;PSR J0437-4715:69.316,-47.252;Pictor A:79.957,-45.779;Orion M42:83.822,-5.391;Canopus:95.988,-52.696;Sirius:101.287,-16.716;PSR B0656+14:104.951,14.238;LMC J0537:84.440,-69.170}"
 
-# Window B (03:00 UTC, LST ~17.5h): Vela Pulsar (PSR B0833-45) + 7 spatial offset beams
-BEAM_TARGETS_WIN03="${BEAM_TARGETS_WIN03:-Vela Pulsar:128.836,-45.176;Vela East:128.900,-45.100;Vela West:128.700,-45.200;Vela North:129.000,-45.000;Vela South:128.600,-45.300;Vela NE:129.100,-44.900;Vela NW:128.800,-45.400;Vela SE:128.700,-45.000}"
+# Window B (03:00 UTC, LST ~17.5h, site lat -33.42°): 8 distinct celestial sources
+BEAM_TARGETS_WIN03="${BEAM_TARGETS_WIN03:-Sgr A* (GC):266.417,-29.008;Centaurus A:201.365,-43.019;PSR B1642-03:251.272,-3.371;Sco X-1:244.979,-15.640;PSR B1749-28:268.064,-28.106;PSR B1818-04:275.318,-4.292;M87 Virgo A:187.706,12.391;PSR B1937+21:294.911,21.583}"
 
 # --- Directories ---
 # Determine scratch location:

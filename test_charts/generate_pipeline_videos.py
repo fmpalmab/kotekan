@@ -51,7 +51,7 @@ INT4_LUT = np.array(
 def load_baseband_frame(
     bin_path: Path,
     num_antennas: int = 64,
-    num_freq: int = 336,
+    num_freq: int = 672,
     samples_per_frame: int = 1536,
 ) -> np.ndarray:
     """
@@ -99,7 +99,7 @@ def compute_baseband_spectrogram(
 def load_correlator_frame(
     bin_path: Path,
     num_elements: int = 64,
-    num_channels: int = 336,
+    num_channels: int = 672,
     polarizations: int = 2,
 ) -> np.ndarray:
     """
@@ -119,7 +119,7 @@ def load_correlator_frame(
 def load_beam_tracker_frame(
     bin_path: Path,
     samples_per_data_set: int = 1536,
-    num_freq: int = 336,
+    num_freq: int = 672,
     max_beams: int = 8,
 ) -> np.ndarray:
     """
@@ -155,7 +155,7 @@ def generate_baseband_spectrogram_video(
     base_name: str,
     output_path: Path,
     num_antennas: int = 64,
-    num_freq: int = 336,
+    num_freq: int = 672,
     samples_per_frame: int = 1536,
     duration_s: float = 30.0,
     fps: int = 10,
@@ -291,7 +291,7 @@ def find_interesting_correlator_channels(
     corr_dir: Path,
     corr_name: str,
     num_elements: int = 64,
-    num_channels: int = 336,
+    num_channels: int = 672,
 ) -> Tuple[int, int]:
     """
     Identifies:
@@ -323,7 +323,7 @@ def find_interesting_correlator_channels(
     # 2. Inspect first correlator dump to compute coherence ratio across all channels
     bin_files = sorted(corr_dir.glob(f"{corr_name}_*.bin"))
     if not bin_files:
-        ch_act = known_rfi_channels[0] if known_rfi_channels else 147
+        ch_act = known_rfi_channels[0] if known_rfi_channels else min(147, num_channels - 1)
         ch_qui = num_channels // 2
         return ch_act, ch_qui
 
@@ -338,14 +338,13 @@ def find_interesting_correlator_channels(
 
     # Active channel: prioritize known RFI channel if it has elevated coherence, else global maximum
     if known_rfi_channels:
-        # Pick the known RFI channel with highest coherence
         ch_active = max(known_rfi_channels, key=lambda c: coherence[c])
     else:
         ch_active = int(np.argmax(coherence))
 
-    # Quiet channel: minimum coherence (or median channel if min is an edge/dead channel)
+    # Quiet channel: 25th percentile of coherence (clean noise)
     sorted_by_coh = np.argsort(coherence)
-    ch_quiet = int(sorted_by_coh[len(sorted_by_coh) // 4])  # 25th percentile of coherence (clean noise)
+    ch_quiet = int(sorted_by_coh[len(sorted_by_coh) // 4])
 
     if ch_active == ch_quiet:
         ch_quiet = (ch_active + num_channels // 2) % num_channels
@@ -358,7 +357,7 @@ def generate_correlator_video(
     corr_name: str,
     output_path: Path,
     num_elements: int = 64,
-    num_channels: int = 336,
+    num_channels: int = 672,
     duration_s: float = 30.0,
     fps: int = 10,
     freq_channel_idx: Optional[int] = None,
@@ -594,7 +593,7 @@ def generate_beam_tracker_video(
     tracker_name: str,
     output_path: Path,
     samples_per_data_set: int = 1536,
-    num_freq: int = 336,
+    num_freq: int = 672,
     max_beams: int = 8,
     duration_s: float = 30.0,
     fps: int = 10,
@@ -761,7 +760,7 @@ def main():
     p_bb.add_argument("--base-name", type=str, required=True)
     p_bb.add_argument("--output", type=str, required=True)
     p_bb.add_argument("--antennas", type=int, default=64)
-    p_bb.add_argument("--num-freq", type=int, default=336)
+    p_bb.add_argument("--num-freq", type=int, default=672)
     p_bb.add_argument("--samples-per-frame", type=int, default=1536)
     p_bb.add_argument("--duration-s", type=float, default=30.0)
     p_bb.add_argument("--fps", type=int, default=10)
@@ -773,7 +772,7 @@ def main():
     p_corr.add_argument("--corr-name", type=str, required=True)
     p_corr.add_argument("--output", type=str, required=True)
     p_corr.add_argument("--num-elements", type=int, default=64)
-    p_corr.add_argument("--num-channels", type=int, default=336)
+    p_corr.add_argument("--num-channels", type=int, default=672)
     p_corr.add_argument("--duration-s", type=float, default=30.0)
     p_corr.add_argument("--fps", type=int, default=10)
     p_corr.add_argument("--freq-channel", type=int, default=None, help="Single frequency channel index")
@@ -787,7 +786,7 @@ def main():
     p_trk.add_argument("--tracker-name", type=str, required=True)
     p_trk.add_argument("--output", type=str, required=True)
     p_trk.add_argument("--samples-per-data-set", type=int, default=1536)
-    p_trk.add_argument("--num-freq", type=int, default=336)
+    p_trk.add_argument("--num-freq", type=int, default=672)
     p_trk.add_argument("--max-beams", type=int, default=8)
     p_trk.add_argument("--duration-s", type=float, default=30.0)
     p_trk.add_argument("--fps", type=int, default=10)
