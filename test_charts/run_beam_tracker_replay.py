@@ -32,6 +32,94 @@ from constants import (
 )
 
 
+import json
+import math
+
+
+def parse_beam_targets(
+    targets_str: Optional[str] = None,
+    max_beams: int = 8,
+    default_ra: float = 83.633,
+    default_dec: float = 22.014,
+    default_lst: float = 5.575,
+    default_name: str = "Primary Target",
+) -> List[Dict[str, Any]]:
+    """
+    Parses beam target definitions into a list of dicts:
+      [{'beam': 0, 'name': 'Crab Pulsar', 'ra_deg': 83.633, 'dec_deg': 22.014, 'lst_hours': 5.575}, ...]
+    Supports formats:
+      - "Name:RA,Dec;Name:RA,Dec"
+      - "RA,Dec;RA,Dec"
+    If fewer targets than max_beams are provided, creates distinct hex/offset beams around primary.
+    """
+    targets: List[Dict[str, Any]] = []
+
+    if targets_str:
+        raw_items = [s.strip() for s in targets_str.split(";") if s.strip()]
+        for idx, item in enumerate(raw_items):
+            if idx >= max_beams:
+                break
+            if ":" in item:
+                name_part, coords_part = item.split(":", 1)
+                name = name_part.strip()
+            else:
+                coords_part = item
+                name = f"Target {idx}" if idx > 0 else default_name
+
+            parts = [p.strip() for p in coords_part.split(",") if p.strip()]
+            if len(parts) >= 2:
+                try:
+                    ra = float(parts[0])
+                    dec = float(parts[1])
+                    targets.append({
+                        "beam": idx,
+                        "name": name,
+                        "ra_deg": ra,
+                        "dec_deg": dec,
+                        "lst_hours": default_lst,
+                    })
+                except ValueError:
+                    pass
+
+    # If no targets parsed, initialize primary
+    if not targets:
+        targets.append({
+            "beam": 0,
+            "name": default_name,
+            "ra_deg": default_ra,
+            "dec_deg": default_dec,
+            "lst_hours": default_lst,
+        })
+
+    # Fill remaining beams with distinct angular offsets around primary target
+    p_ra = targets[0]["ra_deg"]
+    p_dec = targets[0]["dec_deg"]
+    p_name = targets[0]["name"]
+    cos_dec = max(0.1, math.cos(math.radians(p_dec)))
+
+    # Direction offsets for remaining beams (hex pattern ~0.15 deg)
+    dir_names = ["East", "West", "North", "South", "NE", "NW", "SE"]
+    while len(targets) < max_beams:
+        b = len(targets)
+        offset_idx = b - 1
+        angle_rad = 2.0 * math.pi * (offset_idx / 6.0)
+        radius_deg = 0.15 * (1.0 + (offset_idx // 6) * 0.5)
+
+        d_ra = (radius_deg * math.cos(angle_rad)) / cos_dec
+        d_dec = radius_deg * math.sin(angle_rad)
+        sub_name = dir_names[offset_idx % len(dir_names)]
+
+        targets.append({
+            "beam": b,
+            "name": f"{p_name} ({sub_name})",
+            "ra_deg": p_ra + d_ra,
+            "dec_deg": p_dec + d_dec,
+            "lst_hours": default_lst,
+        })
+
+    return targets
+
+
 def create_beam_tracker_yaml(
     yaml_path: Path,
     baseband_dir: Path,
@@ -50,11 +138,42 @@ def create_beam_tracker_yaml(
     source_ra_deg: float = 83.633,
     source_dec_deg: float = 22.014,
     initial_lst_hours: float = 5.575,
+    beam_targets: Optional[List[Dict[str, Any]]] = None,
     buffer_depth: int = 4,
 ):
     """Writes Kotekan YAML for rawFileRead -> cudaBeamTrackerCommand -> rawFileWrite."""
     yaml_path.parent.mkdir(parents=True, exist_ok=True)
+    tracker_dir.mkdir(parents=True, exist_ok=True)
     sizeof_complex_float = 8
+
+    # Ensure all beams have target definitions
+    if beam_targets is None or len(beam_targets) < max_beams:
+        beam_targets = parse_beam_targets(
+            targets_str=None,
+            max_beams=max_beams,
+            default_ra=source_ra_deg,
+            default_dec=source_dec_deg,
+            default_lst=initial_lst_hours,
+        )
+
+    # Save target metadata for downstream inspection and video generation
+    targets_json_path = tracker_dir / f"{tracker_name}_targets.json"
+    with open(targets_json_path, "w") as f:
+        json.dump(beam_targets, f, indent=2)
+
+    # Build per-beam YAML parameters
+    beam_params_lines = []
+    for b, tgt in enumerate(beam_targets[:max_beams]):
+        if b == 0:
+            beam_params_lines.append(f"      source_ra_deg: {tgt['ra_deg']:.6f}")
+            beam_params_lines.append(f"      source_dec_deg: {tgt['dec_deg']:.6f}")
+            beam_params_lines.append(f"      initial_lst_hours: {tgt.get('lst_hours', initial_lst_hours):.6f}")
+        else:
+            beam_params_lines.append(f"      source_ra_deg_{b}: {tgt['ra_deg']:.6f}")
+            beam_params_lines.append(f"      source_dec_deg_{b}: {tgt['dec_deg']:.6f}")
+            beam_params_lines.append(f"      initial_lst_hours_{b}: {tgt.get('lst_hours', initial_lst_hours):.6f}")
+
+    beam_params_yaml = "\n".join(beam_params_lines)
 
     content = f"""######################################################################
 # CHARTS Beam Tracker Replay Pipeline
@@ -128,9 +247,7 @@ gpu:
       initial_active_beams: {max_beams}
       site_lat_deg: {site_lat_deg}
       site_lon_deg: {site_lon_deg}
-      source_ra_deg: {source_ra_deg}
-      source_dec_deg: {source_dec_deg}
-      initial_lst_hours: {initial_lst_hours}
+{beam_params_yaml}
     - name: cudaSyncOutput
     - name: cudaOutputData
       in_buf: host_voltage
@@ -176,6 +293,7 @@ def run_beam_tracker(
     source_ra_deg: float = 83.633,
     source_dec_deg: float = 22.014,
     initial_lst_hours: float = 5.575,
+    beam_targets_str: Optional[str] = None,
 ):
     """Executes Kotekan beam tracker replay on baseband window frames."""
     window_dir = window_dir.resolve()
@@ -219,6 +337,15 @@ def run_beam_tracker(
     tracker_name = f"beams_{base_name}"
     yaml_path = cfg_dir / f"config_tracker_{base_name}.yaml"
 
+    # Parse and configure beam targets
+    beam_targets = parse_beam_targets(
+        targets_str=beam_targets_str,
+        max_beams=max_beams,
+        default_ra=source_ra_deg,
+        default_dec=source_dec_deg,
+        default_lst=initial_lst_hours,
+    )
+
     print("=" * 78)
     print(" CHARTS BEAM TRACKER REPLAY RUNNER")
     print("=" * 78)
@@ -226,6 +353,8 @@ def run_beam_tracker(
     print(f" Base Stream Name     : {base_name}_%07d.bin")
     print(f" Total Frames         : {num_frames}")
     print(f" Max Beams            : {max_beams}")
+    for tgt in beam_targets:
+        print(f"   * Beam {tgt['beam']}: {tgt['name']} (RA={tgt['ra_deg']:.4f}°, Dec={tgt['dec_deg']:.4f}°)")
     print(f" Kotekan Binary       : {kotekan_executable}")
     print(f" Tracker Output Dir   : {t_dir}")
     print(f" YAML Configuration   : {yaml_path}")
@@ -248,6 +377,7 @@ def run_beam_tracker(
         source_ra_deg=source_ra_deg,
         source_dec_deg=source_dec_deg,
         initial_lst_hours=initial_lst_hours,
+        beam_targets=beam_targets,
     )
     print(f"    Saved: {yaml_path.name}")
 
@@ -312,6 +442,7 @@ def main():
     parser.add_argument("--source-ra-deg", type=float, default=83.633)
     parser.add_argument("--source-dec-deg", type=float, default=22.014)
     parser.add_argument("--initial-lst-hours", type=float, default=5.575)
+    parser.add_argument("--beam-targets", type=str, default=None, help="Semicolon-separated beam targets: 'Name:RA,Dec;...' or 'RA,Dec;...'")
     args = parser.parse_args()
 
     run_beam_tracker(
@@ -329,6 +460,7 @@ def main():
         source_ra_deg=args.source_ra_deg,
         source_dec_deg=args.source_dec_deg,
         initial_lst_hours=args.initial_lst_hours,
+        beam_targets_str=args.beam_targets,
     )
 
 

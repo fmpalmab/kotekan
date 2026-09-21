@@ -147,10 +147,12 @@ VIDEO_FPS="${VIDEO_FPS:-10}"
 WORKERS="${SLURM_CPUS_PER_TASK:-16}"
 
 # --- Beam targets (RA/Dec for 8 beams) ---
-# Default: Crab pulsar position as primary; beams spread around it.
-# Override with semicolon-separated RA,Dec pairs:
-#   BEAM_TARGETS="83.633,22.014;83.7,22.1;83.5,21.9;83.8,22.0;83.4,22.1;83.9,21.8;83.6,22.2;83.5,22.0"
-BEAM_TARGETS="${BEAM_TARGETS:-83.633,22.014;83.7,22.1;83.5,21.9;83.8,22.0;83.4,22.1;83.9,21.8;83.6,22.2;83.5,22.0}"
+# --- Beam targets (RA/Dec with object names for 8 beams) ---
+# Window A (15:00 UTC, LST ~5.575h): Crab Pulsar (PSR B0531+21) + 7 spatial offset beams
+BEAM_TARGETS_WIN15="${BEAM_TARGETS_WIN15:-Crab Pulsar:83.633,22.014;Crab East:83.700,22.100;Crab West:83.500,21.900;Crab North:83.800,22.000;Crab South:83.400,22.100;Crab NE:83.900,21.800;Crab NW:83.600,22.200;Crab SE:83.500,22.000}"
+
+# Window B (03:00 UTC, LST ~17.5h): Vela Pulsar (PSR B0833-45) + 7 spatial offset beams
+BEAM_TARGETS_WIN03="${BEAM_TARGETS_WIN03:-Vela Pulsar:128.836,-45.176;Vela East:128.900,-45.100;Vela West:128.700,-45.200;Vela North:129.000,-45.000;Vela South:128.600,-45.300;Vela NE:129.100,-44.900;Vela NW:128.800,-45.400;Vela SE:128.700,-45.000}"
 
 # --- Directories ---
 # Determine scratch location:
@@ -192,13 +194,6 @@ else
     RFI_DESC="disabled"
 fi
 
-# Parse first beam target for primary tracking
-IFS=';' read -ra TARGET_ARRAY <<< "${BEAM_TARGETS}"
-FIRST_TARGET="${TARGET_ARRAY[0]}"
-IFS=',' read -ra RA_DEC <<< "${FIRST_TARGET}"
-PRIMARY_RA="${RA_DEC[0]:-83.633}"
-PRIMARY_DEC="${RA_DEC[1]:-22.014}"
-
 echo "======================================================================"
 echo " 3. Configuration:"
 echo "    Duration           : ${DURATION_S} s ($(( DURATION_S / 60 )) min)"
@@ -211,7 +206,8 @@ echo "    Samples/Frame      : ${SAMPLES_PER_FRAME}"
 echo "    Injected Events    : ${NUM_EVENTS} per window"
 echo "    Persistent RFI     : ${RFI_DESC} (amp ${RFI_AMP} LSB)"
 echo "    Max Beams          : ${MAX_BEAMS}"
-echo "    Primary Target     : RA=${PRIMARY_RA} deg, Dec=${PRIMARY_DEC} deg"
+echo "    Window A Targets   : ${BEAM_TARGETS_WIN15}"
+echo "    Window B Targets   : ${BEAM_TARGETS_WIN03}"
 echo "    Video Duration     : ${VIDEO_DURATION_S} s @ ${VIDEO_FPS} fps"
 echo "    Workers            : ${WORKERS}"
 echo "    Scratch Base       : ${SCRATCH_BASE}"
@@ -269,14 +265,13 @@ python3 test_charts/run_beam_tracker_replay.py \
     --samples-per-frame "${SAMPLES_PER_FRAME}" \
     --max-beams "${MAX_BEAMS}" \
     --integration-spectra "${INTEGRATION_SPECTRA}" \
-    --source-ra-deg "${PRIMARY_RA}" \
-    --source-dec-deg "${PRIMARY_DEC}" \
+    --beam-targets "${BEAM_TARGETS_WIN15}" \
     --initial-lst-hours 5.575
 
 echo "======================================================================"
 echo " 7. Generating Videos for Window A (15:00 UTC)"
 echo "======================================================================"
-echo "--- 7a. Baseband 8x8 Spectrogram Video ---"
+echo "--- 7a. Baseband Frequency Power Line Spectrum Video ---"
 python3 test_charts/generate_pipeline_videos.py baseband \
     --window-dir "${WIN15_DIR}" \
     --base-name "win15UTC_${ANTENNAS}ant" \
@@ -288,7 +283,7 @@ python3 test_charts/generate_pipeline_videos.py baseband \
     --fps "${VIDEO_FPS}" \
     2>&1 || echo "[WARNING] Baseband video generation failed for win15UTC"
 
-echo "--- 7b. Correlator Matrix Video ---"
+echo "--- 7b. Correlator Dual-Channel Matrix Video ---"
 python3 test_charts/generate_pipeline_videos.py correlator \
     --corr-dir "${WIN15_DIR}/correlator" \
     --corr-name "corr_win15UTC_${ANTENNAS}ant" \
@@ -297,9 +292,10 @@ python3 test_charts/generate_pipeline_videos.py correlator \
     --num-channels "${NUM_FREQ}" \
     --duration-s "${VIDEO_DURATION_S}" \
     --fps "${VIDEO_FPS}" \
+    --freq-channels "auto" \
     2>&1 || echo "[WARNING] Correlator video generation failed for win15UTC"
 
-echo "--- 7c. Beam Tracker Output Video ---"
+echo "--- 7c. Beam Tracker Output Video (All Beams + Object Legend) ---"
 python3 test_charts/generate_pipeline_videos.py tracker \
     --tracker-dir "${WIN15_DIR}/tracker" \
     --tracker-name "beams_win15UTC_${ANTENNAS}ant" \
@@ -309,6 +305,7 @@ python3 test_charts/generate_pipeline_videos.py tracker \
     --max-beams "${MAX_BEAMS}" \
     --duration-s "${VIDEO_DURATION_S}" \
     --fps "${VIDEO_FPS}" \
+    --beam-targets "${BEAM_TARGETS_WIN15}" \
     2>&1 || echo "[WARNING] Tracker video generation failed for win15UTC"
 
 echo "======================================================================"
@@ -387,14 +384,13 @@ python3 test_charts/run_beam_tracker_replay.py \
     --samples-per-frame "${SAMPLES_PER_FRAME}" \
     --max-beams "${MAX_BEAMS}" \
     --integration-spectra "${INTEGRATION_SPECTRA}" \
-    --source-ra-deg "${PRIMARY_RA}" \
-    --source-dec-deg "${PRIMARY_DEC}" \
+    --beam-targets "${BEAM_TARGETS_WIN03}" \
     --initial-lst-hours 17.5
 
 echo "======================================================================"
 echo " 12. Generating Videos for Window B (03:00 UTC)"
 echo "======================================================================"
-echo "--- 12a. Baseband 8x8 Spectrogram Video ---"
+echo "--- 12a. Baseband Frequency Power Line Spectrum Video ---"
 python3 test_charts/generate_pipeline_videos.py baseband \
     --window-dir "${WIN03_DIR}" \
     --base-name "win03UTC_${ANTENNAS}ant" \
@@ -406,7 +402,7 @@ python3 test_charts/generate_pipeline_videos.py baseband \
     --fps "${VIDEO_FPS}" \
     2>&1 || echo "[WARNING] Baseband video generation failed for win03UTC"
 
-echo "--- 12b. Correlator Matrix Video ---"
+echo "--- 12b. Correlator Dual-Channel Matrix Video ---"
 python3 test_charts/generate_pipeline_videos.py correlator \
     --corr-dir "${WIN03_DIR}/correlator" \
     --corr-name "corr_win03UTC_${ANTENNAS}ant" \
@@ -415,9 +411,10 @@ python3 test_charts/generate_pipeline_videos.py correlator \
     --num-channels "${NUM_FREQ}" \
     --duration-s "${VIDEO_DURATION_S}" \
     --fps "${VIDEO_FPS}" \
+    --freq-channels "auto" \
     2>&1 || echo "[WARNING] Correlator video generation failed for win03UTC"
 
-echo "--- 12c. Beam Tracker Output Video ---"
+echo "--- 12c. Beam Tracker Output Video (All Beams + Object Legend) ---"
 python3 test_charts/generate_pipeline_videos.py tracker \
     --tracker-dir "${WIN03_DIR}/tracker" \
     --tracker-name "beams_win03UTC_${ANTENNAS}ant" \
@@ -427,6 +424,7 @@ python3 test_charts/generate_pipeline_videos.py tracker \
     --max-beams "${MAX_BEAMS}" \
     --duration-s "${VIDEO_DURATION_S}" \
     --fps "${VIDEO_FPS}" \
+    --beam-targets "${BEAM_TARGETS_WIN03}" \
     2>&1 || echo "[WARNING] Tracker video generation failed for win03UTC"
 
 echo "======================================================================"
