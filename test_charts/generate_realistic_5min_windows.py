@@ -97,6 +97,7 @@ class SimulatedEvent:
     pulse_period_s: float = 0.0
     pulse_width_ms: float = 1.0
     channels: Optional[List[int]] = None
+    is_persistent: bool = False
     description: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
@@ -109,13 +110,39 @@ def schedule_random_events(
     num_events: int = 3,
     allowed_types: Optional[List[str]] = None,
     seed: int = 42,
+    persistent_rfi_channels: Optional[List[int]] = None,
+    persistent_rfi_amp: float = 7.0,
 ) -> List[SimulatedEvent]:
-    """Generates a randomized schedule of transient events within the window."""
+    """Generates a randomized schedule of transient events plus optional persistent site RFI."""
     rng = np.random.default_rng(seed)
     if allowed_types is None:
         allowed_types = ["frb", "pulsar", "rfi_narrow", "rfi_leo"]
 
     events: List[SimulatedEvent] = []
+
+    # 1. Site Persistent Narrowband RFI (Always active for 100% of the window)
+    if persistent_rfi_channels:
+        az = float(rng.uniform(0.0, 2.0 * math.pi))
+        l0 = float(0.96 * math.sin(az))
+        m0 = float(0.96 * math.cos(az))
+        chans = sorted(persistent_rfi_channels)
+        freqs_str = ", ".join(f"{DEFAULT_FREQUENCY_START_MHZ + ch * CHARTS_CHANNEL_WIDTH_MHZ:.1f} MHz" for ch in chans)
+        events.append(
+            SimulatedEvent(
+                event_id="site_persistent_rfi",
+                event_type="rfi_narrow",
+                t_start_s=0.0,
+                duration_s=float(duration_s),
+                nominal_amp=float(persistent_rfi_amp),
+                l0=l0,
+                m0=m0,
+                channels=chans,
+                is_persistent=True,
+                description=f"Site continuous RFI on channels {chans} ({freqs_str}) (amp={persistent_rfi_amp:.1f} LSB, 100% duty cycle)",
+            )
+        )
+
+    # 2. Transient Events (FRB, Pulsar, LEO sweep, etc.)
     # Candidate time slots with buffer margins
     margin_start = min(20.0, duration_s * 0.05)
     margin_end = max(margin_start + 0.01, duration_s - min(30.0, duration_s * 0.1))
@@ -281,6 +308,10 @@ def build_frame_selection_schedule(
     sparse_step = max(1, int(round((event_sparse_cadence_ms * 1e-3) / frame_duration_s)))
 
     for ev in events:
+        if ev.is_persistent:
+            # Persistent RFI is active in all frames; do not over-select frames for it
+            continue
+
         t_start = ev.t_start_s
         t_end = t_start + ev.duration_s
         k_start = max(0, int(math.floor(t_start / frame_duration_s)))
@@ -296,6 +327,12 @@ def build_frame_selection_schedule(
         for k in range(k_dense_end, k_end, sparse_step):
             selected_set.add(k)
             frame_events.setdefault(k, []).append(ev.event_id)
+
+    # Attach persistent events to all selected frames
+    persistent_evs = [ev.event_id for ev in events if ev.is_persistent]
+    for k in selected_set:
+        for p_id in persistent_evs:
+            frame_events.setdefault(k, []).append(p_id)
 
     sorted_indices = sorted(selected_set)
     return sorted_indices, frame_events
@@ -536,8 +573,11 @@ def compute_analytic_lightcurve(
 
         elif ev.event_type == "rfi_narrow":
             frac_chans = len(ev.channels or [1]) / len(freqs_hz)
-            mask = (t_points >= t0) & (t_points <= t0 + dur)
-            p_total[mask] += amp_sq * frac_chans
+            if ev.is_persistent:
+                p_total += amp_sq * frac_chans
+            else:
+                mask = (t_points >= t0) & (t_points <= t0 + dur)
+                p_total[mask] += amp_sq * frac_chans
 
         elif ev.event_type == "rfi_leo":
             mask = (t_points >= t0) & (t_points <= t0 + dur)
@@ -566,6 +606,8 @@ def generate_5min_window(
     workers: int = 16,
     seed: Optional[int] = None,
     sun_activity: str = "quiet",
+    persistent_rfi_channels: Optional[List[int]] = None,
+    persistent_rfi_amp: float = 7.0,
 ):
     """Generates the full 5-minute window dataset and metadata."""
     if seed is None:
@@ -612,12 +654,14 @@ def generate_5min_window(
     sigma_noise_base = float(noise_model.temp_to_adc_sigma(t_noise_incoherent))
     sigma_ant = sigma_ant_base * sigma_noise_base
 
-    # Schedule transient events
+    # Schedule transient events + persistent site RFI
     events = schedule_random_events(
         duration_s=duration_s,
         num_events=num_events,
         allowed_types=event_types,
         seed=seed + 77,
+        persistent_rfi_channels=persistent_rfi_channels,
+        persistent_rfi_amp=persistent_rfi_amp,
     )
 
     # Select frames to write
@@ -793,9 +837,40 @@ def main():
     parser.add_argument("--workers", type=int, default=16, help="Multiprocessing workers")
     parser.add_argument("--seed", type=int, default=None, help="RNG seed")
     parser.add_argument("--sun-activity", type=str, default="quiet", choices=["quiet", "moderate", "active"])
+    parser.add_argument(
+        "--persistent-rfi-channels",
+        type=str,
+        default="94,133,147",
+        help="Comma-separated channel indices for continuous site RFI (default: '94,133,147' -> 328.2, 339.9, 344.1 MHz; set 'none' to disable)",
+    )
+    parser.add_argument(
+        "--persistent-rfi-freqs",
+        type=str,
+        default=None,
+        help="Comma-separated frequencies in MHz for continuous site RFI (e.g. '328.2,339.9,344.1')",
+    )
+    parser.add_argument(
+        "--persistent-rfi-amp",
+        type=float,
+        default=7.0,
+        help="Amplitude of persistent site RFI in LSB (default: 7.0 LSB)",
+    )
     args = parser.parse_args()
 
     ev_types = [s.strip() for s in args.events.split(",")] if args.events else None
+
+    # Parse persistent RFI channels
+    persistent_chans = None
+    if args.persistent_rfi_freqs:
+        freq_list = [float(x.strip()) for x in args.persistent_rfi_freqs.split(",") if x.strip()]
+        persistent_chans = [
+            int(round((f - DEFAULT_FREQUENCY_START_MHZ) / CHARTS_CHANNEL_WIDTH_MHZ))
+            for f in freq_list
+        ]
+    elif args.persistent_rfi_channels and args.persistent_rfi_channels.lower() != "none":
+        persistent_chans = [
+            int(x.strip()) for x in args.persistent_rfi_channels.split(",") if x.strip().isdigit()
+        ]
 
     generate_5min_window(
         utc_hour=args.utc_hour,
@@ -814,6 +889,8 @@ def main():
         workers=args.workers,
         seed=args.seed,
         sun_activity=args.sun_activity,
+        persistent_rfi_channels=persistent_chans,
+        persistent_rfi_amp=args.persistent_rfi_amp,
     )
 
 

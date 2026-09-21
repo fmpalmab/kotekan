@@ -121,6 +121,9 @@ NUM_FREQ="${NUM_FREQ:-336}"
 NUM_EVENTS="${NUM_EVENTS:-3}"
 WORKERS="${SLURM_CPUS_PER_TASK:-16}"
 
+PERSISTENT_RFI_CHANNELS="${PERSISTENT_RFI_CHANNELS:-94,133,147}"
+PERSISTENT_RFI_AMP="${PERSISTENT_RFI_AMP:-7.0}"
+
 SCRATCH_BASE="${SLURM_TMPDIR:-/tmp}/charts_windows_${SLURM_JOB_ID:-manual}"
 PERM_OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/test_charts/data/5min_windows}"
 
@@ -140,6 +143,7 @@ echo "    Event Dense Span   : ${EVENT_DENSE_S} s"
 echo "    Antennas           : ${ANTENNAS}"
 echo "    Frequency Channels : ${NUM_FREQ}"
 echo "    Injected Events    : ${NUM_EVENTS} per window"
+echo "    Persistent RFI     : channels [${PERSISTENT_RFI_CHANNELS}] (amp ${PERSISTENT_RFI_AMP} LSB)"
 echo "    Workers            : ${WORKERS}"
 echo "    Scratch Base       : ${SCRATCH_BASE}"
 echo "    Persistent Storage : ${PERM_OUTPUT_DIR}"
@@ -159,6 +163,8 @@ python3 test_charts/generate_realistic_5min_windows.py \
     --antennas "${ANTENNAS}" \
     --num-freq "${NUM_FREQ}" \
     --num-events "${NUM_EVENTS}" \
+    --persistent-rfi-channels "${PERSISTENT_RFI_CHANNELS}" \
+    --persistent-rfi-amp "${PERSISTENT_RFI_AMP}" \
     --workers "${WORKERS}" \
     --out-dir "${WIN15_DIR}" \
     --file-name "win15UTC_${ANTENNAS}ant"
@@ -177,6 +183,8 @@ python3 test_charts/generate_realistic_5min_windows.py \
     --antennas "${ANTENNAS}" \
     --num-freq "${NUM_FREQ}" \
     --num-events "${NUM_EVENTS}" \
+    --persistent-rfi-channels "${PERSISTENT_RFI_CHANNELS}" \
+    --persistent-rfi-amp "${PERSISTENT_RFI_AMP}" \
     --workers "${WORKERS}" \
     --out-dir "${WIN03_DIR}" \
     --file-name "win03UTC_${ANTENNAS}ant"
