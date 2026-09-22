@@ -38,11 +38,57 @@ from constants import (
     LOCAL_FREQUENCY_CHANNELS,
 )
 
+import multiprocessing as mp
+
 # 4-bit two's complement LUT
 INT4_LUT = np.array(
     [0, 1, 2, 3, 4, 5, 6, 7, -8, -7, -6, -5, -4, -3, -2, -1],
     dtype=np.float64,
 )
+
+# 4-bit two's complement square LUT
+INT4_SQUARES = np.array(
+    [0, 1, 4, 9, 16, 25, 36, 49, 64, 49, 36, 25, 16, 9, 4, 1],
+    dtype=np.float32,
+)
+# Precompute 256-element byte power LUT: |v|^2 = real^2 + imag^2
+BYTE_POWER_LUT = np.array(
+    [INT4_SQUARES[b >> 4] + INT4_SQUARES[b & 0x0F] for b in range(256)],
+    dtype=np.float32,
+)
+
+
+def _worker_load_baseband(args):
+    fpath, num_ant, num_freq, samples = args
+    raw = np.fromfile(fpath, dtype=np.uint8)
+    if raw.size < 4:
+        raise ValueError(f"File too small: {fpath}")
+    meta_size = int(np.frombuffer(raw[:4].tobytes(), dtype="<u4", count=1)[0])
+    expected_bytes = samples * num_freq * num_ant
+    packed = raw[4 + meta_size : 4 + meta_size + expected_bytes]
+    power = BYTE_POWER_LUT[packed].reshape(samples, num_freq, num_ant)
+    mean_power = np.mean(power, axis=0)  # (num_freq, num_ant)
+    spec_db = 10.0 * np.log10(mean_power.T + 1e-12)  # (num_ant, num_freq)
+    mean_db = np.mean(spec_db, axis=0)
+    return spec_db, mean_db
+
+
+def _worker_load_tracker(args):
+    fpath, samples, num_freq, max_beams = args
+    raw = np.fromfile(fpath, dtype=np.uint8)
+    if raw.size < 4:
+        raise ValueError(f"File too small: {fpath}")
+    meta_size = int(np.frombuffer(raw[:4].tobytes(), dtype="<u4", count=1)[0])
+    expected_floats = samples * num_freq * max_beams * 2
+    expected_bytes = expected_floats * 4
+    floats = np.frombuffer(raw[4 + meta_size : 4 + meta_size + expected_bytes], dtype="<f4")
+    shaped = floats.reshape(samples, num_freq, max_beams, 2)
+    power = shaped[..., 0] ** 2 + shaped[..., 1] ** 2
+    mean_pwr = np.mean(power, axis=0)  # (freq, beams)
+    integ_pwr = np.sum(mean_pwr, axis=0)  # (beams,)
+    power_db = 10.0 * np.log10(mean_pwr + 1e-12)
+    integ_db = 10.0 * np.log10(integ_pwr + 1e-12)
+    return power_db, integ_db
 
 
 # ---------------------------------------------------------------------------
@@ -156,15 +202,17 @@ def generate_baseband_spectrogram_video(
     num_antennas: int = 64,
     num_freq: int = 672,
     samples_per_frame: int = 1536,
-    duration_s: float = 120.0,
+    duration_s: float = 60.0,
     fps: int = 10,
     max_frames: Optional[int] = None,
+    workers: int = 16,
 ):
     """
     Generates a video showing baseband frequency power (dB) across all antennas:
       - Top panel: Array-average spectrum (dB vs MHz) with dynamic peak marker and callout.
       - Bottom panel: 8×8 grid of individual antenna line spectra following dB power,
         making RFI spikes and transient bursts immediately visible.
+    Optimized with parallel precomputation across workers for rapid rendering.
     """
     bin_files = sorted(window_dir.glob(f"{base_name}_*.bin"))
     if not bin_files:
@@ -192,10 +240,21 @@ def generate_baseband_spectrogram_video(
 
     freq_mhz = DEFAULT_FREQUENCY_START_MHZ + np.arange(num_freq) * CHARTS_CHANNEL_WIDTH_MHZ
 
+    # Parallel pre-extraction of all spectra across workers
+    print(f"  Pre-extracting {total_video_frames} baseband spectra in parallel using {workers} workers...")
+    tasks = [(f, num_antennas, num_freq, samples_per_frame) for f in sampled_files]
+    if workers > 1:
+        with mp.Pool(processes=min(workers, len(tasks) or 1)) as pool:
+            results = pool.map(_worker_load_baseband, tasks)
+    else:
+        results = [_worker_load_baseband(t) for t in tasks]
+
+    all_specs = [r[0] for r in results]
+    all_means = [r[1] for r in results]
+
     # Compute baseline from first frame
-    first_volts = load_baseband_frame(sampled_files[0], num_antennas, num_freq, samples_per_frame)
-    first_spec = compute_baseband_spectrogram(first_volts, num_antennas)  # (antennas, freq) in dB
-    first_mean = np.mean(first_spec, axis=0)
+    first_spec = all_specs[0]  # (antennas, freq) in dB
+    first_mean = all_means[0]
 
     # Dynamic dB limits with headroom for RFI peaks
     ymin = float(np.percentile(first_spec, 1) - 3.0)
@@ -263,9 +322,8 @@ def generate_baseband_spectrogram_video(
     time_text = fig.text(0.5, 0.015, "", ha="center", fontsize=12, color="cyan")
 
     def update(frame_idx):
-        volts = load_baseband_frame(sampled_files[frame_idx], num_antennas, num_freq, samples_per_frame)
-        spec = compute_baseband_spectrogram(volts, num_antennas)
-        cur_mean = np.mean(spec, axis=0)
+        cur_spec = all_specs[frame_idx]
+        cur_mean = all_means[frame_idx]
 
         mean_line.set_ydata(cur_mean)
         p_idx = int(np.argmax(cur_mean))
@@ -273,7 +331,7 @@ def generate_baseband_spectrogram_video(
         peak_dot.set_offsets([[freq_mhz[p_idx], cur_mean[p_idx]]])
 
         for a in range(num_antennas):
-            ant_lines[a].set_ydata(spec[a])
+            ant_lines[a].set_ydata(cur_spec[a])
 
         t_s = frame_idx * (duration_s / max(1, total_video_frames))
         mins = int(t_s // 60)
@@ -635,16 +693,18 @@ def generate_beam_tracker_video(
     samples_per_data_set: int = 1536,
     num_freq: int = 672,
     max_beams: int = 8,
-    duration_s: float = 120.0,
+    duration_s: float = 60.0,
     fps: int = 10,
     max_frames: Optional[int] = None,
     beam_targets_str: Optional[str] = None,
+    workers: int = 16,
 ):
     """
     Generates a video showing formed-beam power evolution:
       - Top panel: Formed beam power vs frequency across ALL active beams,
         with individual high-contrast colors and tracked object names in the legend.
       - Bottom panel: Integrated formed beam power bar chart per beam.
+    Optimized with parallel precomputation across workers for rapid rendering.
     """
     bin_files = sorted(tracker_dir.glob(f"{tracker_name}_*.bin"))
     if not bin_files:
@@ -671,6 +731,18 @@ def generate_beam_tracker_video(
     )
 
     freq_mhz = DEFAULT_FREQUENCY_START_MHZ + np.arange(num_freq) * CHARTS_CHANNEL_WIDTH_MHZ
+
+    # Parallel pre-extraction across workers
+    print(f"  Pre-extracting {total_video_frames} beam tracker spectra in parallel using {workers} workers...")
+    tasks = [(f, samples_per_data_set, num_freq, max_beams) for f in sampled_files]
+    if workers > 1:
+        with mp.Pool(processes=min(workers, len(tasks) or 1)) as pool:
+            results = pool.map(_worker_load_tracker, tasks)
+    else:
+        results = [_worker_load_tracker(t) for t in tasks]
+
+    all_powers = [r[0] for r in results]
+    all_integs = [r[1] for r in results]
 
     # 1. Load beam target metadata for object labels in legend
     target_metadata = {}
@@ -709,9 +781,9 @@ def generate_beam_tracker_video(
     while len(vibrant_colors) < max_beams:
         vibrant_colors.append(plt.cm.tab10(len(vibrant_colors) % 10))
 
-    # Load first frame for setup
-    first_beams = load_beam_tracker_frame(sampled_files[0], samples_per_data_set, num_freq, max_beams)
-    first_power = np.mean(np.abs(first_beams) ** 2, axis=0)  # (freq, beams)
+    # First frame for setup
+    first_power = all_powers[0]  # (freq, beams) in dB
+    first_integ = all_integs[0]  # (beams,) in dB
 
     fig, axes = plt.subplots(2, 1, figsize=(16, 10), facecolor="#0a0a1a",
                               gridspec_kw={"height_ratios": [3, 2]})
@@ -732,7 +804,7 @@ def generate_beam_tracker_video(
             label = f"B{b}: {tgt_name}"
 
         line, = ax_spec.plot(
-            freq_mhz, 10 * np.log10(first_power[:, b] + 1e-12),
+            freq_mhz, first_power[:, b],
             color=vibrant_colors[b], linewidth=1.4, label=label, alpha=0.9,
         )
         lines.append(line)
@@ -748,9 +820,8 @@ def generate_beam_tracker_video(
     # Bottom: Integrated power bar chart
     ax_bar = axes[1]
     ax_bar.set_facecolor("#111122")
-    integrated = np.sum(first_power, axis=0)  # (beams,)
     bars = ax_bar.bar(
-        range(max_beams), 10 * np.log10(integrated + 1e-12),
+        range(max_beams), first_integ,
         color=vibrant_colors[:max_beams], edgecolor="white", linewidth=0.6,
     )
     ax_bar.set_xlabel("Formed Beam Target", color="#C9D1D9", fontsize=10)
@@ -773,13 +844,11 @@ def generate_beam_tracker_video(
     fig.tight_layout(rect=[0, 0.04, 1, 0.95])
 
     def update(frame_idx):
-        beams = load_beam_tracker_frame(sampled_files[frame_idx], samples_per_data_set, num_freq, max_beams)
-        power = np.mean(np.abs(beams) ** 2, axis=0)  # (freq, beams)
+        cur_power = all_powers[frame_idx]
+        cur_integ = all_integs[frame_idx]
         for b in range(max_beams):
-            lines[b].set_ydata(10 * np.log10(power[:, b] + 1e-12))
-        cur_integ = np.sum(power, axis=0)
-        for b, bar in enumerate(bars):
-            bar.set_height(10 * np.log10(cur_integ[b] + 1e-12))
+            lines[b].set_ydata(cur_power[:, b])
+            bars[b].set_height(cur_integ[b])
         t_s = frame_idx * (duration_s / max(1, total_video_frames))
         mins = int(t_s // 60)
         secs = int(t_s % 60)
@@ -814,8 +883,9 @@ def main():
     p_bb.add_argument("--antennas", type=int, default=64)
     p_bb.add_argument("--num-freq", type=int, default=672)
     p_bb.add_argument("--samples-per-frame", type=int, default=1536)
-    p_bb.add_argument("--duration-s", type=float, default=120.0, help="Video duration in seconds (default: 120.0 = 2 minutes)")
+    p_bb.add_argument("--duration-s", type=float, default=60.0, help="Video duration in seconds (default: 60.0 = 1 minute)")
     p_bb.add_argument("--fps", type=int, default=10)
+    p_bb.add_argument("--workers", type=int, default=16, help="Parallel workers for frame pre-extraction (default: 16)")
     p_bb.add_argument("--max-frames", type=int, default=None)
 
     # --- correlator ---
@@ -825,7 +895,7 @@ def main():
     p_corr.add_argument("--output", type=str, required=True)
     p_corr.add_argument("--num-elements", type=int, default=64)
     p_corr.add_argument("--num-channels", type=int, default=672)
-    p_corr.add_argument("--duration-s", type=float, default=120.0, help="Video duration in seconds (default: 120.0 = 2 minutes)")
+    p_corr.add_argument("--duration-s", type=float, default=60.0, help="Video duration in seconds (default: 60.0 = 1 minute)")
     p_corr.add_argument("--fps", type=int, default=10)
     p_corr.add_argument("--freq-channel", type=int, default=None, help="Single frequency channel index")
     p_corr.add_argument("--freq-channels", type=str, default=None, help="Comma-separated frequency channels or 'auto'")
@@ -840,8 +910,9 @@ def main():
     p_trk.add_argument("--samples-per-data-set", type=int, default=1536)
     p_trk.add_argument("--num-freq", type=int, default=672)
     p_trk.add_argument("--max-beams", type=int, default=8)
-    p_trk.add_argument("--duration-s", type=float, default=120.0, help="Video duration in seconds (default: 120.0 = 2 minutes)")
+    p_trk.add_argument("--duration-s", type=float, default=60.0, help="Video duration in seconds (default: 60.0 = 1 minute)")
     p_trk.add_argument("--fps", type=int, default=10)
+    p_trk.add_argument("--workers", type=int, default=16, help="Parallel workers for frame pre-extraction (default: 16)")
     p_trk.add_argument("--beam-targets", type=str, default=None, help="Semicolon-separated target names/coordinates")
     p_trk.add_argument("--max-frames", type=int, default=None)
 
@@ -857,6 +928,7 @@ def main():
             samples_per_frame=args.samples_per_frame,
             duration_s=args.duration_s,
             fps=args.fps,
+            workers=args.workers,
             max_frames=args.max_frames,
         )
     elif args.command == "correlator":
@@ -890,6 +962,7 @@ def main():
             max_beams=args.max_beams,
             duration_s=args.duration_s,
             fps=args.fps,
+            workers=args.workers,
             beam_targets_str=args.beam_targets,
             max_frames=args.max_frames,
         )

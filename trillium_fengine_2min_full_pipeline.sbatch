@@ -10,7 +10,7 @@
 set -euo pipefail
 
 echo "======================================================================"
-echo " CHARTS 2-Minute Full Pipeline: Baseband + Correlator + Beam Tracker"
+echo " CHARTS 1-Minute Full Pipeline: Baseband + Correlator + Beam Tracker"
 echo " With 8 Random Events, CHARTS Thermal Noise, RFI, and Video Output"
 echo " Hostname       : $(hostname)"
 echo " CUDA Device    : ${CUDA_VISIBLE_DEVICES:-0}"
@@ -114,7 +114,7 @@ echo "Kotekan binary verified: ${KOTEKAN_BIN}"
 # 3. Simulation Parameters
 # ============================================================================
 # --- Timing & Decimation ---
-DURATION_S="${DURATION_S:-120}"              # 2 minutes
+DURATION_S="${DURATION_S:-60}"               # 1 minute
 BG_CADENCE_S="${BG_CADENCE_S:-2.0}"          # Background frame cadence
 EVENT_DENSE_S="${EVENT_DENSE_S:-1.0}"        # Dense capture around events
 EVENT_SPARSE_CADENCE_MS="${EVENT_SPARSE_CADENCE_MS:-100.0}" # Sparse capture cadence (ms)
@@ -141,7 +141,7 @@ MAX_BEAMS="${MAX_BEAMS:-8}"                  # 8 formed beams
 INTEGRATION_SPECTRA="${INTEGRATION_SPECTRA:-320}"
 
 # --- Video ---
-VIDEO_DURATION_S="${VIDEO_DURATION_S:-${DURATION_S:-120}}"   # Full 2-minute window videos
+VIDEO_DURATION_S="${VIDEO_DURATION_S:-${DURATION_S:-60}}"   # Full 1-minute window videos
 VIDEO_FPS="${VIDEO_FPS:-10}"
 
 # --- Workers ---
@@ -269,7 +269,7 @@ python3 test_charts/run_beam_tracker_replay.py \
     --initial-lst-hours 5.575
 
 echo "======================================================================"
-echo " 7. Generating Videos for Window A (15:00 UTC)"
+echo " 7. Generating Videos & Plots for Window A (15:00 UTC)"
 echo "======================================================================"
 echo "--- 7a. Baseband Frequency Power Line Spectrum Video ---"
 python3 test_charts/generate_pipeline_videos.py baseband \
@@ -281,19 +281,19 @@ python3 test_charts/generate_pipeline_videos.py baseband \
     --samples-per-frame "${SAMPLES_PER_FRAME}" \
     --duration-s "${VIDEO_DURATION_S}" \
     --fps "${VIDEO_FPS}" \
+    --workers "${WORKERS}" \
     2>&1 || echo "[WARNING] Baseband video generation failed for win15UTC"
 
-echo "--- 7b. Correlator Dual-Channel Matrix Video ---"
-python3 test_charts/generate_pipeline_videos.py correlator \
+echo "--- 7b. Correlator Multi-Baseline Waterfall & Dynamic Spectrum Plots ---"
+python3 test_charts/visualize_correlator_waterfalls.py \
     --corr-dir "${WIN15_DIR}/correlator" \
-    --corr-name "corr_win15UTC_${ANTENNAS}ant" \
-    --output "${WIN15_DIR}/videos/correlator_matrix_win15UTC.mp4" \
+    --output "${WIN15_DIR}/plots/correlator_waterfall_win15UTC.png" \
     --num-elements "${ANTENNAS}" \
     --num-channels "${NUM_FREQ}" \
-    --duration-s "${VIDEO_DURATION_S}" \
-    --fps "${VIDEO_FPS}" \
-    --freq-channels "auto" \
-    2>&1 || echo "[WARNING] Correlator video generation failed for win15UTC"
+    --duration-s "${DURATION_S}" \
+    --max-time-samples 200 \
+    --window-label "15:00 UTC (Daytime, Sun UP)" \
+    2>&1 || echo "[WARNING] Correlator waterfall generation failed for win15UTC"
 
 echo "--- 7c. Beam Tracker Output Video (All Beams + Object Legend) ---"
 python3 test_charts/generate_pipeline_videos.py tracker \
@@ -306,12 +306,16 @@ python3 test_charts/generate_pipeline_videos.py tracker \
     --duration-s "${VIDEO_DURATION_S}" \
     --fps "${VIDEO_FPS}" \
     --beam-targets "${BEAM_TARGETS_WIN15}" \
+    --workers "${WORKERS}" \
     2>&1 || echo "[WARNING] Tracker video generation failed for win15UTC"
 
 echo "--- 7d. CASM Correlation Matrix Waterfall Plot (16 Antennas) ---"
 python3 test_charts/visualize_charts_casm_correlation_matrix.py \
     --corr-dir "${WIN15_DIR}/correlator" \
     --num-antennas 16 \
+    --num-channels "${NUM_FREQ}" \
+    --duration-s "${DURATION_S}" \
+    --max-time-samples 150 \
     --output "${WIN15_DIR}/plots/casm_correlation_matrix_win15UTC_16ant.png" \
     2>&1 || echo "[WARNING] CASM plot generation failed for win15UTC"
 
@@ -395,7 +399,7 @@ python3 test_charts/run_beam_tracker_replay.py \
     --initial-lst-hours 17.5
 
 echo "======================================================================"
-echo " 12. Generating Videos for Window B (03:00 UTC)"
+echo " 12. Generating Videos & Plots for Window B (03:00 UTC)"
 echo "======================================================================"
 echo "--- 12a. Baseband Frequency Power Line Spectrum Video ---"
 python3 test_charts/generate_pipeline_videos.py baseband \
@@ -407,19 +411,19 @@ python3 test_charts/generate_pipeline_videos.py baseband \
     --samples-per-frame "${SAMPLES_PER_FRAME}" \
     --duration-s "${VIDEO_DURATION_S}" \
     --fps "${VIDEO_FPS}" \
+    --workers "${WORKERS}" \
     2>&1 || echo "[WARNING] Baseband video generation failed for win03UTC"
 
-echo "--- 12b. Correlator Dual-Channel Matrix Video ---"
-python3 test_charts/generate_pipeline_videos.py correlator \
+echo "--- 12b. Correlator Multi-Baseline Waterfall & Dynamic Spectrum Plots ---"
+python3 test_charts/visualize_correlator_waterfalls.py \
     --corr-dir "${WIN03_DIR}/correlator" \
-    --corr-name "corr_win03UTC_${ANTENNAS}ant" \
-    --output "${WIN03_DIR}/videos/correlator_matrix_win03UTC.mp4" \
+    --output "${WIN03_DIR}/plots/correlator_waterfall_win03UTC.png" \
     --num-elements "${ANTENNAS}" \
     --num-channels "${NUM_FREQ}" \
-    --duration-s "${VIDEO_DURATION_S}" \
-    --fps "${VIDEO_FPS}" \
-    --freq-channels "auto" \
-    2>&1 || echo "[WARNING] Correlator video generation failed for win03UTC"
+    --duration-s "${DURATION_S}" \
+    --max-time-samples 200 \
+    --window-label "03:00 UTC (Nighttime, Sun DOWN)" \
+    2>&1 || echo "[WARNING] Correlator waterfall generation failed for win03UTC"
 
 echo "--- 12c. Beam Tracker Output Video (All Beams + Object Legend) ---"
 python3 test_charts/generate_pipeline_videos.py tracker \
@@ -432,12 +436,16 @@ python3 test_charts/generate_pipeline_videos.py tracker \
     --duration-s "${VIDEO_DURATION_S}" \
     --fps "${VIDEO_FPS}" \
     --beam-targets "${BEAM_TARGETS_WIN03}" \
+    --workers "${WORKERS}" \
     2>&1 || echo "[WARNING] Tracker video generation failed for win03UTC"
 
 echo "--- 12d. CASM Correlation Matrix Waterfall Plot (16 Antennas) ---"
 python3 test_charts/visualize_charts_casm_correlation_matrix.py \
     --corr-dir "${WIN03_DIR}/correlator" \
     --num-antennas 16 \
+    --num-channels "${NUM_FREQ}" \
+    --duration-s "${DURATION_S}" \
+    --max-time-samples 150 \
     --output "${WIN03_DIR}/plots/casm_correlation_matrix_win03UTC_16ant.png" \
     2>&1 || echo "[WARNING] CASM plot generation failed for win03UTC"
 
@@ -500,7 +508,7 @@ for WIN_LABEL in "win15UTC" "win03UTC"; do
 done
 
 echo "======================================================================"
-echo " CHARTS 2-MINUTE FULL PIPELINE COMPLETED SUCCESSFULLY!"
+echo " CHARTS 1-MINUTE FULL PIPELINE COMPLETED SUCCESSFULLY!"
 echo " Persistent products : ${PERM_OUTPUT_DIR}"
 echo " Scratch datasets    : ${SCRATCH_BASE}"
 echo "======================================================================"

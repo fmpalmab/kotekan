@@ -151,11 +151,13 @@ def select_representative_antennas(
 def load_visibilities_from_correlator_dir(
     corr_dir: Path,
     num_elements: int = 64,
-    num_channels: int = 336,
+    num_channels: int = 672,
     max_frames: Optional[int] = None,
+    max_time_samples: int = 150,
+    duration_s: float = 60.0,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Loads sequential correlator dumps from corr_dir.
+    Loads sequential correlator dumps from corr_dir, sampling evenly across time.
     Returns:
         vis_cube: shape (num_times, num_channels, num_elements, num_elements) complex128
         time_s: shape (num_times,)
@@ -165,18 +167,21 @@ def load_visibilities_from_correlator_dir(
     if not bin_files:
         raise FileNotFoundError(f"No correlator .bin files found in {corr_dir}")
 
-    if max_frames and len(bin_files) > max_frames:
-        bin_files = bin_files[:max_frames]
+    total_files = len(bin_files)
+    limit_samples = max_frames if max_frames else max_time_samples
+    target_count = min(total_files, limit_samples)
+    indices = np.linspace(0, total_files - 1, target_count).astype(int)
+    sampled_files = [bin_files[i] for i in indices]
 
-    num_times = len(bin_files)
-    print(f"Loading {num_times} correlator dumps from {corr_dir} ...")
+    num_times = len(sampled_files)
+    print(f"Loading {num_times} sampled correlator dumps (out of {total_files} total) from {corr_dir} ...")
 
     vis_cube = np.zeros((num_times, num_channels, num_elements, num_elements), dtype=np.complex128)
-    for t_idx, fpath in enumerate(bin_files):
+    for t_idx, fpath in enumerate(sampled_files):
         vis = load_astron_correlator_dump(fpath, num_elements=num_elements, num_channels=num_channels)
         vis_cube[t_idx] = vis
 
-    time_s = np.linspace(0.0, num_times * 0.00512, num_times)
+    time_s = np.linspace(0.0, duration_s, num_times)
     freq_mhz = DEFAULT_FREQUENCY_START_MHZ + np.arange(num_channels) * CHARTS_CHANNEL_WIDTH_MHZ
     return vis_cube, time_s, freq_mhz
 
@@ -622,8 +627,21 @@ def main():
     parser.add_argument(
         "--duration-s",
         type=float,
-        default=120.0,
-        help="Simulation window duration in seconds (default: 120.0 = 2 minutes).",
+        default=60.0,
+        help="Simulation window duration in seconds (default: 60.0 = 1 minute).",
+    )
+    parser.add_argument(
+        "--num-channels", "--num-freq",
+        dest="num_channels",
+        type=int,
+        default=672,
+        help="Number of frequency channels (default: 672).",
+    )
+    parser.add_argument(
+        "--max-time-samples",
+        type=int,
+        default=150,
+        help="Maximum time samples to load evenly across window (default: 150).",
     )
 
     args = parser.parse_args()
@@ -646,7 +664,13 @@ def main():
 
     if args.corr_dir and args.corr_dir.exists():
         try:
-            vis_cube, time_s, freq_mhz = load_visibilities_from_correlator_dir(args.corr_dir)
+            vis_cube, time_s, freq_mhz = load_visibilities_from_correlator_dir(
+                corr_dir=args.corr_dir,
+                num_elements=64,
+                num_channels=args.num_channels,
+                max_time_samples=args.max_time_samples,
+                duration_s=args.duration_s,
+            )
             source_desc = f"Correlator Dumps ({args.corr_dir.name})"
         except Exception as e:
             print(f"[WARN] Failed to load correlator dumps from {args.corr_dir}: {e}")
