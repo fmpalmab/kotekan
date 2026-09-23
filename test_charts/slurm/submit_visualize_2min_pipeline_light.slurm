@@ -4,7 +4,6 @@
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=16
 #SBATCH --time=01:00:00
-#SBATCH --mem=32G
 #SBATCH --output=slurm_charts_viz_2min_light_%j.log
 
 set -euo pipefail
@@ -62,7 +61,12 @@ FINAL_OUT_DIR="${OUTPUT_DIR:-${SRC_DIR}/plots_light}"
 mkdir -p "${FINAL_OUT_DIR}"
 
 # 3. Generate Visualizations
-python3 "${REPO_ROOT}/kotekan/test_charts/visualize_3d_lobes_and_pipeline_light.py" \
+VIZ_SCRIPT="${REPO_ROOT}/test_charts/visualize_3d_lobes_and_pipeline_light.py"
+if [ ! -f "${VIZ_SCRIPT}" ] && [ -f "${REPO_ROOT}/kotekan/test_charts/visualize_3d_lobes_and_pipeline_light.py" ]; then
+    VIZ_SCRIPT="${REPO_ROOT}/kotekan/test_charts/visualize_3d_lobes_and_pipeline_light.py"
+fi
+
+python3 "${VIZ_SCRIPT}" \
     --window-dir "${WIN03_DIR}" \
     --out-dir "${FINAL_OUT_DIR}" \
     --frame-idx "${FRAME_IDX:-164}"
