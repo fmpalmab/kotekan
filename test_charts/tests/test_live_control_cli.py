@@ -115,6 +115,10 @@ sink:
 """
         cls.config_path.write_text(config_yaml, encoding="utf-8")
 
+        if not KOTEKAN_BIN.exists():
+            cls.proc = None
+            raise unittest.SkipTest(f"Kotekan binary not found at {KOTEKAN_BIN}; skipping live binary tests.")
+
         # Launch Kotekan
         cmd = [str(KOTEKAN_BIN), "-c", str(cls.config_path), "-b", f"127.0.0.1:{cls.port}"]
         cls.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

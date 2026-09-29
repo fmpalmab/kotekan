@@ -6,4 +6,5 @@ plotly
 pandas
 h5py
 astropy
-../charts-constants
+pyyaml
+pynvml

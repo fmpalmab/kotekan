@@ -150,6 +150,26 @@ bash charts/start_32antennas_tracker.sh
 tail -f /tmp/kotekan_32ant_tracker.log
 ```
 
+### Mode C: Centralized Simulation & Verification Suite (PC & Trillium)
+Simulates realistic physical astronomical backgrounds (Sun UP / Sun DOWN), transient events (FRBs, pulsars, RFI), and correlates/tracks formed beams:
+
+```bash
+cd ~/charts_workspace/kotekan
+source .venv/bin/activate
+
+# 1. Fast verification test on local PC (< 1 min run time):
+python test_charts/charts_sim.py pipeline --preset quick
+
+# 2. Full 1-minute realistic observation (64 antennas, 8 formed beams, Carén site):
+python test_charts/charts_sim.py pipeline --preset 1min --profile day
+
+# 3. Dry-run test (verifies data generation and configs without GPU execution):
+python test_charts/charts_sim.py pipeline --preset quick --dry-run
+
+# 4. Slurm execution on Trillium cluster:
+sbatch test_charts/slurm/trillium_pipeline.slurm
+```
+
 ---
 
 ## 6. Live Steering & Telemetry CLI

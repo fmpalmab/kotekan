@@ -18,6 +18,7 @@ docs/sphinx/html/*
 .ccache/*
 .cache/*
 scratch/*
+scratch_charts_sim/*
 Manifest*.toml
 *.log
 *.conda
