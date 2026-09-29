@@ -95,6 +95,7 @@ add_library(
     BeamExtract.cpp
     BeamInspect.cpp
     configTrackerWriter.cpp
+    runMetadataWriter.cpp
     givenDataGen.cpp
     testDataGen.cpp
     DPDKShuffleSimulate.cpp
