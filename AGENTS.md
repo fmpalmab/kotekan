@@ -1,6 +1,14 @@
 This is a high-performance, soft-realtime radio astronomy pipeline code. This is an older codebase, maintained by a number of developers using different styles and conventions. Below are some guidelines for editing this code. Rules written as "must" are firm; "should" means a strong default.
 
 
+CHARTS fork notes
+-----------------
+
+This repository is the CHARTS fork of kotekan (github.com/charts-experiment/kotekan). The main development branch is `kotekan_charts`, not `develop`; upstream CHIME/CHORD kotekan lives on the `root` remote (github.com/kotekan/kotekan, branch `develop`). CHARTS is a different telescope than CHIME/CHORD: CHORD-specific production notes below (service daemon, `chord` branch, CI containers) describe upstream operations and do not apply to CHARTS deployments.
+
+CHARTS-specific code lives in `lib/stages/chartsFEngineSim.*`, `lib/cuda/cudaDirectBeamTracker.*`, `lib/cuda/cudaBeamTrackerV5.*`, `lib/cuda/cudaTransientTrigger.*`, `charts/config/`, and `test_charts/` (simulation framework, beam tracker benchmarks, and pipeline visualizers). CHARTS pipelines run on the Trillium HPC cluster via Slurm scripts under `test_charts/`; GPU work targets the local GPU's compute capability rather than a hardcoded architecture. Constants and telescope parameters come from the sibling `charts-constants` package; do not hardcode instrument values.
+
+
 Development
 -----------
 
