@@ -43,7 +43,7 @@ cudaAntennaMaskCommand::cudaAntennaMaskCommand(
 
     _gpu_mem_voltage = config.get_default<std::string>(unique_name, "gpu_mem_voltage", "voltage");
     _gpu_mem_alive_voltages = config.get_default<std::string>(unique_name, "gpu_mem_alive_voltages", "");
-    _max_alive_antennas = config.get_default<int>(unique_name, "max_alive_antennas", 7);
+    _max_alive_antennas = config.get_default<int>(unique_name, "max_alive_antennas", _num_elements);
 
     {
         std::lock_guard<std::mutex> lock(_global_mutex);
