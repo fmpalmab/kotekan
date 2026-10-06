@@ -37,7 +37,7 @@ jobs:
               console.log('Manual trigger for branches:', branches);
             } else {
               // Scheduled trigger or manual without custom branches
-              branches = ['develop'];
+              branches = ['${{ github.ref_name }}'];
               console.log('Running scheduled branches:', branches);
             }
 
