@@ -33,7 +33,7 @@ sample_period_s: 3.333333333333e-6
 samples_per_data_set: 15360
 frame_arrival_period: samples_per_data_set * sample_period_s
 bytes_per_dataset: n_channels_per_packet * local_subbands_per_packet * samples_per_data_set
-capture_n_frames: 168750          # Continuous streaming duration (~2.4 hours)
+capture_n_frames: 1687500         # Continuous streaming duration (24.0 hours)
 
 # Memory & Buffer Management
 buffer_depth: 20                  # Host RAM frame queue depth (~6.6 GB total queue per NIC)
@@ -200,6 +200,8 @@ gpu:
       num_local_freq: 336
       samples_per_data_set: 15360
       buffer_depth: 3
+      antenna_order: "descending"        # RFSoC raw buffer ordering: raw_id = 63 - physical_ant
+      active_antennas: [0, 4, 5, 6, 32]  # Alive physical antennas convention (auto-mapped to raw elements [63, 59, 58, 57, 31])
       auto_detect_enabled: true
       blank_voltages_enabled: false # Steering weights masking in cudaDirectBeamTracker already zeroes bad antennas
       # Open/disconnected ADC inputs float at power ~0.20-0.35. Threshold 5.0 marks open channels DEAD, keeping 7 alive antennas.
@@ -216,6 +218,8 @@ gpu:
       num_local_freq: 336
       samples_per_data_set: 15360
       spacing_m: 0.6
+      antenna_order: "descending"        # Maps raw element r to physical position (63 - r)
+      active_antennas: [0, 4, 5, 6, 32]  # Alive physical antennas
       max_beams: 2
       initial_active_beams: 2
       buffer_depth: 3
@@ -265,6 +269,8 @@ gpu:
       num_local_freq: 336
       samples_per_data_set: 15360
       buffer_depth: 3
+      antenna_order: "descending"        # RFSoC raw buffer ordering: raw_id = 63 - physical_ant
+      active_antennas: [0, 4, 5, 6, 32]  # Alive physical antennas convention (auto-mapped to raw elements [63, 59, 58, 57, 31])
       auto_detect_enabled: true
       blank_voltages_enabled: false # Steering weights masking in cudaDirectBeamTracker already zeroes bad antennas
       # Open/disconnected ADC inputs float at power ~0.20-0.35. Threshold 5.0 marks open channels DEAD, keeping 7 alive antennas.
@@ -281,6 +287,8 @@ gpu:
       num_local_freq: 336
       samples_per_data_set: 15360
       spacing_m: 0.6
+      antenna_order: "descending"        # Maps raw element r to physical position (63 - r)
+      active_antennas: [0, 4, 5, 6, 32]  # Alive physical antennas
       max_beams: 2
       initial_active_beams: 2
       buffer_depth: 3
